@@ -5,7 +5,6 @@ import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.block.model.BakedQuad;
 import net.minecraft.client.renderer.block.model.IBakedModel;
-import net.minecraft.client.renderer.block.model.ItemCameraTransforms;
 import net.minecraft.client.renderer.block.model.ItemOverrideList;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.util.EnumFacing;
@@ -46,11 +45,6 @@ public final class TmtEmptyPartParentModel implements IBakedModel {
     @Override
     public TextureAtlasSprite getParticleTexture() {
         return particle == null ? Minecraft.getMinecraft().getTextureMapBlocks().getMissingSprite() : particle;
-    }
-
-    @Override
-    public ItemCameraTransforms getItemCameraTransforms() {
-        return ItemCameraTransforms.DEFAULT;
     }
 
     @Override

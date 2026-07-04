@@ -38,7 +38,7 @@ public final class MaterialDescriptorRegistry {
             MaterialDescriptor descriptor = createDescriptor(material);
             DESCRIPTORS.put(material.identifier, descriptor);
             if (descriptor.hasTextureSuffix()) {
-                suffixes.add(descriptor.getTextureSuffix());
+                suffixes.add(descriptor.textureSuffix());
             }
         }
         TmtMaterialMapManager.finishUpload();
@@ -79,7 +79,7 @@ public final class MaterialDescriptorRegistry {
         if (descriptor == null || !descriptor.hasTextureSuffix()) {
             return baseTexture;
         }
-        ResourceLocation suffixTexture = new ResourceLocation(baseTexture + "_" + descriptor.getTextureSuffix());
+        ResourceLocation suffixTexture = new ResourceLocation(baseTexture + "_" + descriptor.textureSuffix());
         return REGISTERED_MASKS.contains(suffixTexture) ? suffixTexture : baseTexture;
     }
 

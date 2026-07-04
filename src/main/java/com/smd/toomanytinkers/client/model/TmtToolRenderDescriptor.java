@@ -71,10 +71,10 @@ public final class TmtToolRenderDescriptor {
             this.maskTexture = MaterialDescriptorRegistry.resolveMaskTexture(baseTexture, materialId);
             MaterialDescriptor descriptor = materialId == null ? null : MaterialDescriptorRegistry.get(materialId);
             this.maskSlot = MaterialDescriptorRegistry.getMaskSlot(maskTexture);
-            this.materialType = descriptor == null ? MaterialDescriptor.TYPE_DIRECT : descriptor.getMaterialType();
-            this.materialIndex = descriptor == null ? 0 : descriptor.getMaterialIndex();
-            this.sourceIndex = descriptor == null ? 0 : descriptor.getSourceIndex();
-            this.flags = descriptor == null ? flags : descriptor.getFlags() | flags;
+            this.materialType = descriptor == null ? MaterialDescriptor.TYPE_DIRECT : descriptor.materialType();
+            this.materialIndex = descriptor == null ? 0 : descriptor.materialIndex();
+            this.sourceIndex = descriptor == null ? 0 : descriptor.sourceIndex();
+            this.flags = descriptor == null ? flags : descriptor.flags() | flags;
             this.geometry = GeometryRef.sprite(maskTexture, definition);
             this.transform = new Matrix4f(transform);
             this.sideOpaque = sideOpaque;

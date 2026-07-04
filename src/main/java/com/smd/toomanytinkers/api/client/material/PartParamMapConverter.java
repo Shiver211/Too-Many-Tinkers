@@ -17,7 +17,7 @@ public final class PartParamMapConverter {
 
     public static BufferedImage preserveAuthoredPixels(BufferedImage source) {
         BufferedImage out = new BufferedImage(source.getWidth(), source.getHeight(), BufferedImage.TYPE_INT_ARGB);
-        forEachPixel(source, (x, y, argb) -> out.setRGB(x, y, argb));
+        forEachPixel(source, out::setRGB);
         return out;
     }
 
@@ -82,52 +82,33 @@ public final class PartParamMapConverter {
     }
 
     private static int clamp255(int value) {
-        return Math.min(255, Math.max(0, value));
+        return Math.clamp(value, 0, 255);
     }
 
-    public static final class Options {
-        public static final Options DEFAULT = new Options(false, 0);
-        public static final Options NORMALIZED = new Options(true, 0);
+    public record Options(boolean normalize, int alphaThreshold) {
+            public static final Options DEFAULT = new Options(false, 0);
+            public static final Options NORMALIZED = new Options(true, 0);
 
-        private final boolean normalize;
-        private final int alphaThreshold;
-
-        public Options(boolean normalize, int alphaThreshold) {
-            this.normalize = normalize;
-            this.alphaThreshold = clamp255(alphaThreshold);
+            public Options(boolean normalize, int alphaThreshold) {
+                this.normalize = normalize;
+                this.alphaThreshold = clamp255(alphaThreshold);
+            }
         }
-
-        public boolean normalize() {
-            return normalize;
-        }
-
-        public int alphaThreshold() {
-            return alphaThreshold;
-        }
-    }
 
     private interface PixelConsumer {
         void accept(int x, int y, int argb);
     }
 
-    private static final class Range {
-        private static final Range FULL = new Range(0, 255);
-
-        private final int min;
-        private final int max;
-
-        private Range(int min, int max) {
-            this.min = min;
-            this.max = max;
-        }
+    private record Range(int min, int max) {
+            private static final Range FULL = new Range(0, 255);
 
         private int normalize(int value) {
-            if (max <= min) {
-                return value;
+                if (max <= min) {
+                    return value;
+                }
+                return clamp255((value - min) * 255 / (max - min));
             }
-            return clamp255((value - min) * 255 / (max - min));
         }
-    }
 
     private static final class MutableRange {
         private int min = 255;

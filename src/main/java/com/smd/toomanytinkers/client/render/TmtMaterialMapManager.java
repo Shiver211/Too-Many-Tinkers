@@ -62,12 +62,7 @@ public final class TmtMaterialMapManager {
         int type = MaterialDescriptor.TYPE_RAMP;
         if (sourceTexture != null) {
             type = MaterialDescriptor.TYPE_TEXTURE;
-            Integer existing = SOURCE_TILES.get(sourceTexture);
-            if (existing == null) {
-                existing = SOURCE_TILES.size();
-                SOURCE_TILES.put(sourceTexture, existing);
-            }
-            sourceIndex = existing;
+            sourceIndex = SOURCE_TILES.computeIfAbsent(sourceTexture, k -> SOURCE_TILES.size());
         }
         MATERIALS.add(new MaterialEntry(material, rampIndex));
         dirty = true;
@@ -221,17 +216,10 @@ public final class TmtMaterialMapManager {
     }
 
     private static int sampleCoord(int value, int sourceSize, int targetSize) {
-        return Math.min(targetSize - 1, Math.max(0, (int) ((value + 0.5f) * targetSize / sourceSize)));
+        return Math.clamp((int) ((value + 0.5f) * targetSize / sourceSize), 0, targetSize - 1);
     }
 
-    private static final class MaterialEntry {
-        private final Material material;
-        private final int rampIndex;
-
-        private MaterialEntry(Material material, int rampIndex) {
-            this.material = material;
-            this.rampIndex = rampIndex;
-        }
+    private record MaterialEntry(Material material, int rampIndex) {
     }
 
     private static final class UploadedMaterialTexture extends AbstractTexture {

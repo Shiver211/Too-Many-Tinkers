@@ -120,16 +120,12 @@ public abstract class DynamicTextureHelperMixin {
     }
 
     private static String tmt$getArmorPartName(int index, int materialCount) {
-        switch (index) {
-            case 0:
-                return "core";
-            case 1:
-                return "plates";
-            case 2:
-                return materialCount > 3 ? "plates" : "trim";
-            default:
-                return "trim";
-        }
+        return switch (index) {
+            case 0 -> "core";
+            case 1 -> "plates";
+            case 2 -> materialCount > 3 ? "plates" : "trim";
+            default -> "trim";
+        };
     }
 
     private static void tmt$applyVertexColor(BufferedImage image, int color) {
@@ -155,7 +151,7 @@ public abstract class DynamicTextureHelperMixin {
     }
 
     private static int clamp255(int value) {
-        return Math.max(0, Math.min(255, value));
+        return Math.clamp(value, 0, 255);
     }
 
     private static boolean tmt$hasIncognito(ItemStack stack) {

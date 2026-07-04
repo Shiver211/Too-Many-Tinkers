@@ -161,10 +161,9 @@ public final class TmtGpuToolTemplateModel implements TmtGpuItemModel {
             if (this == obj) {
                 return true;
             }
-            if (!(obj instanceof CacheKey)) {
+            if (!(obj instanceof CacheKey other)) {
                 return false;
             }
-            CacheKey other = (CacheKey) obj;
             return owner == other.owner
                     && overrideSignature == other.overrideSignature
                     && broken == other.broken

@@ -25,7 +25,7 @@ final class MaterialColorEvaluator {
             int high = readInt(info, "high", Integer.MIN_VALUE);
             if (low != Integer.MIN_VALUE && mid != Integer.MIN_VALUE && high != Integer.MIN_VALUE) {
                 boolean inverse = info.getClass().getName().contains("Inverse");
-                int color = grayByte < 50 ? low : grayByte > 217 ? high : mid;
+                int color = grayByte < 50 ? low : (grayByte > 217 ? high : mid);
                 return inverse ? inverseColorByGray(color, grayByte) : multiplyColorByGray(color, grayByte);
             }
 
@@ -93,11 +93,11 @@ final class MaterialColorEvaluator {
     }
 
     private static int clamp255(int value) {
-        return Math.min(255, Math.max(0, value));
+        return Math.clamp(value, 0, 255);
     }
 
     private static float clamp01(float value) {
-        return Math.max(0f, Math.min(1f, value));
+        return Math.clamp(value, 0f, 1f);
     }
 
     private static int readInt(Object instance, String name, int fallback) {

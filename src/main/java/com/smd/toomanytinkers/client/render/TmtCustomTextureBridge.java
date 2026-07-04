@@ -183,7 +183,7 @@ public final class TmtCustomTextureBridge {
     }
 
     private static int clamp255(int value) {
-        return Math.max(0, Math.min(255, value));
+        return Math.clamp(value, 0, 255);
     }
 
     @Nullable

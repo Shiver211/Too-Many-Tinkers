@@ -24,16 +24,12 @@ public final class TmtMaskBits {
             return false;
         }
         long bit = 1L << (index & 63);
-        switch (index >>> 6) {
-            case 0:
-                return (bits0 & bit) != 0L;
-            case 1:
-                return (bits1 & bit) != 0L;
-            case 2:
-                return (bits2 & bit) != 0L;
-            default:
-                return (bits3 & bit) != 0L;
-        }
+        return switch (index >>> 6) {
+            case 0 -> (bits0 & bit) != 0L;
+            case 1 -> (bits1 & bit) != 0L;
+            case 2 -> (bits2 & bit) != 0L;
+            default -> (bits3 & bit) != 0L;
+        };
     }
 
     public boolean isEmpty() {
@@ -45,10 +41,9 @@ public final class TmtMaskBits {
         if (this == obj) {
             return true;
         }
-        if (!(obj instanceof TmtMaskBits)) {
+        if (!(obj instanceof TmtMaskBits other)) {
             return false;
         }
-        TmtMaskBits other = (TmtMaskBits) obj;
         return bits0 == other.bits0
                 && bits1 == other.bits1
                 && bits2 == other.bits2

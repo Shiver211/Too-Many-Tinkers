@@ -4,7 +4,9 @@ import net.minecraft.util.ResourceLocation;
 
 import javax.annotation.Nullable;
 
-public final class MaterialDescriptor {
+public record MaterialDescriptor(String materialId, int materialType, int materialIndex, int sourceIndex,
+                                 int animationId, int flags, MaterialRenderMode renderMode, String textureSuffix,
+                                 ResourceLocation sourceTexture) {
 
     public static final int TYPE_DIRECT = 0;
     public static final int TYPE_RAMP = 1;
@@ -14,16 +16,6 @@ public final class MaterialDescriptor {
     public static final int FLAG_TEXTURE_SUFFIX = 1 << 1;
     public static final int FLAG_ANIMATED = 1 << 2;
     public static final int FLAG_SOURCE_TEXTURE = 1 << 3;
-
-    private final String materialId;
-    private final int materialType;
-    private final int materialIndex;
-    private final int sourceIndex;
-    private final int animationId;
-    private final int flags;
-    private final MaterialRenderMode renderMode;
-    private final String textureSuffix;
-    private final ResourceLocation sourceTexture;
 
     public MaterialDescriptor(String materialId,
                               int materialType,
@@ -45,10 +37,6 @@ public final class MaterialDescriptor {
         this.sourceTexture = sourceTexture;
     }
 
-    public String getMaterialId() {
-        return materialId;
-    }
-
     public int getRampRow() {
         return materialIndex;
     }
@@ -57,37 +45,15 @@ public final class MaterialDescriptor {
         return materialIndex;
     }
 
-    public int getMaterialType() {
-        return materialType;
-    }
-
-    public int getMaterialIndex() {
-        return materialIndex;
-    }
-
-    public int getSourceIndex() {
-        return sourceIndex;
-    }
-
-    public int getAnimationId() {
-        return animationId;
-    }
-
-    public int getFlags() {
-        return flags;
-    }
-
-    public MaterialRenderMode getRenderMode() {
-        return renderMode;
-    }
-
+    @Override
     @Nullable
-    public String getTextureSuffix() {
+    public String textureSuffix() {
         return textureSuffix;
     }
 
+    @Override
     @Nullable
-    public ResourceLocation getSourceTexture() {
+    public ResourceLocation sourceTexture() {
         return sourceTexture;
     }
 

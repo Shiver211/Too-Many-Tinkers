@@ -31,8 +31,8 @@ public final class TmtPartDefinition {
         int x = 0;
         int y = 0;
         if (model instanceof IPatternOffset) {
-            x = ((IPatternOffset) model).getXOffset();
-            y = ((IPatternOffset) model).getYOffset();
+            x = model.getXOffset();
+            y = model.getYOffset();
         }
         return new TmtPartDefinition(model.getTextures(), x, y, rotationDegrees);
     }

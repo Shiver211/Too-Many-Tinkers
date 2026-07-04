@@ -301,58 +301,35 @@ public final class PartSpriteMeshCache {
         vertices.add(v);
     }
 
-    private static final class Key {
-        private final ResourceLocation texture;
-        private final int offsetX;
-        private final int offsetY;
-        private final float rotationDegrees;
-        private final float zBias;
-        private final TmtMaskBits sideOpaque;
-        private final TmtMaskBits compositeOpaque;
-
-        private Key(ResourceLocation texture,
-                    int offsetX,
-                    int offsetY,
-                    float rotationDegrees,
-                    float zBias,
-                    TmtMaskBits sideOpaque,
-                    TmtMaskBits compositeOpaque) {
-            this.texture = texture;
-            this.offsetX = offsetX;
-            this.offsetY = offsetY;
-            this.rotationDegrees = rotationDegrees;
-            this.zBias = zBias;
-            this.sideOpaque = sideOpaque;
-            this.compositeOpaque = compositeOpaque;
-        }
+    private record Key(ResourceLocation texture, int offsetX, int offsetY, float rotationDegrees, float zBias,
+                       TmtMaskBits sideOpaque, TmtMaskBits compositeOpaque) {
 
         @Override
-        public boolean equals(Object obj) {
-            if (this == obj) {
-                return true;
+            public boolean equals(Object obj) {
+                if (this == obj) {
+                    return true;
+                }
+                if (!(obj instanceof Key other)) {
+                    return false;
+                }
+                return offsetX == other.offsetX
+                        && offsetY == other.offsetY
+                        && Float.floatToIntBits(rotationDegrees) == Float.floatToIntBits(other.rotationDegrees)
+                        && Float.floatToIntBits(zBias) == Float.floatToIntBits(other.zBias)
+                        && sideOpaque.equals(other.sideOpaque)
+                        && compositeOpaque.equals(other.compositeOpaque)
+                        && texture.equals(other.texture);
             }
-            if (!(obj instanceof Key)) {
-                return false;
-            }
-            Key other = (Key) obj;
-            return offsetX == other.offsetX
-                    && offsetY == other.offsetY
-                    && Float.floatToIntBits(rotationDegrees) == Float.floatToIntBits(other.rotationDegrees)
-                    && Float.floatToIntBits(zBias) == Float.floatToIntBits(other.zBias)
-                    && sideOpaque.equals(other.sideOpaque)
-                    && compositeOpaque.equals(other.compositeOpaque)
-                    && texture.equals(other.texture);
-        }
 
-        @Override
-        public int hashCode() {
-            return Objects.hash(texture, offsetX, offsetY,
-                    Float.floatToIntBits(rotationDegrees),
-                    Float.floatToIntBits(zBias),
-                    sideOpaque,
-                    compositeOpaque);
+            @Override
+            public int hashCode() {
+                return Objects.hash(texture, offsetX, offsetY,
+                        Float.floatToIntBits(rotationDegrees),
+                        Float.floatToIntBits(zBias),
+                        sideOpaque,
+                        compositeOpaque);
+            }
         }
-    }
 
     public static final class PartMesh {
         private final int id;

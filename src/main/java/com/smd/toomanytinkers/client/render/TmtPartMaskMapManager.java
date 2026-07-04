@@ -159,19 +159,10 @@ public final class TmtPartMaskMapManager {
     }
 
     private static int sampleCoord(int value, int sourceSize, int targetSize) {
-        return Math.min(targetSize - 1, Math.max(0, (int) ((value + 0.5f) * targetSize / sourceSize)));
+        return Math.clamp((int) ((value + 0.5f) * targetSize / sourceSize), 0, targetSize - 1);
     }
 
-    private static final class MaskEntry {
-        private final int slot;
-        private final int[] pixels;
-        private final TmtMaskBits opaque;
-
-        private MaskEntry(int slot, int[] pixels, TmtMaskBits opaque) {
-            this.slot = slot;
-            this.pixels = pixels;
-            this.opaque = opaque;
-        }
+    private record MaskEntry(int slot, int[] pixels, TmtMaskBits opaque) {
     }
 
     private static final class UploadedMaskTexture extends AbstractTexture {

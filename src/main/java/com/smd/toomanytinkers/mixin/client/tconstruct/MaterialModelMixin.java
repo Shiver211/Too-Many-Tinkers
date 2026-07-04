@@ -44,7 +44,7 @@ public class MaterialModelMixin {
         }
         ImmutableMap<ItemCameraTransforms.TransformType, TRSRTransformation> transforms =
                 PerspectiveMapWrapper.getTransforms(state);
-        TextureAtlasSprite particle = textures.isEmpty() ? null : bakedTextureGetter.apply(textures.get(0));
+        TextureAtlasSprite particle = textures.isEmpty() ? null : bakedTextureGetter.apply(textures.getFirst());
         TmtPartDefinition definition = new TmtPartDefinition(textures, offsetX, offsetY, 0f);
         cir.setReturnValue(new TmtPartMaterialModel(new TmtEmptyPartParentModel(particle), definition, transforms));
     }
