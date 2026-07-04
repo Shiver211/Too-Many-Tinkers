@@ -1,8 +1,8 @@
 package com.smd.toomanytinkers.client.render;
 
 import net.minecraft.client.renderer.OpenGlHelper;
+import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL20;
-import org.lwjgl.opengl.GLContext;
 
 public final class TmtInstancedPaletteShader {
 
@@ -148,7 +148,7 @@ public final class TmtInstancedPaletteShader {
         if (program != 0) {
             return;
         }
-        if (!GLContext.getCapabilities().OpenGL43 || !GLContext.getCapabilities().GL_ARB_shader_draw_parameters) {
+        if (!GL.getCapabilities().OpenGL43 || !GL.getCapabilities().GL_ARB_shader_draw_parameters) {
             throw new IllegalStateException("TMT GPU renderer requires OpenGL 4.3 + GL_ARB_shader_draw_parameters");
         }
         int vertex = compile(GL20.GL_VERTEX_SHADER, VERTEX);
