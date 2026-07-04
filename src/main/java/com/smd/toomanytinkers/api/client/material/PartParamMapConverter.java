@@ -86,14 +86,17 @@ public final class PartParamMapConverter {
     }
 
     public record Options(boolean normalize, int alphaThreshold) {
-            public static final Options DEFAULT = new Options(false, 0);
-            public static final Options NORMALIZED = new Options(true, 0);
+        public static final Options DEFAULT = new Options(false, 0);
+        public static final Options NORMALIZED = new Options(true, 0);
 
-            public Options(boolean normalize, int alphaThreshold) {
-                this.normalize = normalize;
-                this.alphaThreshold = clamp255(alphaThreshold);
-            }
+        public Options {
+            alphaThreshold = clamp255(alphaThreshold);
         }
+
+        private static int clamp255(int value) {
+            return Math.clamp(value, 0, 255);
+        }
+    }
 
     private interface PixelConsumer {
         void accept(int x, int y, int argb);
@@ -107,8 +110,8 @@ public final class PartParamMapConverter {
                     return value;
                 }
                 return clamp255((value - min) * 255 / (max - min));
-            }
         }
+    }
 
     private static final class MutableRange {
         private int min = 255;

@@ -301,35 +301,16 @@ public final class PartSpriteMeshCache {
         vertices.add(v);
     }
 
-    private record Key(ResourceLocation texture, int offsetX, int offsetY, float rotationDegrees, float zBias,
-                       TmtMaskBits sideOpaque, TmtMaskBits compositeOpaque) {
-
-        @Override
-            public boolean equals(Object obj) {
-                if (this == obj) {
-                    return true;
-                }
-                if (!(obj instanceof Key other)) {
-                    return false;
-                }
-                return offsetX == other.offsetX
-                        && offsetY == other.offsetY
-                        && Float.floatToIntBits(rotationDegrees) == Float.floatToIntBits(other.rotationDegrees)
-                        && Float.floatToIntBits(zBias) == Float.floatToIntBits(other.zBias)
-                        && sideOpaque.equals(other.sideOpaque)
-                        && compositeOpaque.equals(other.compositeOpaque)
-                        && texture.equals(other.texture);
-            }
-
-            @Override
-            public int hashCode() {
-                return Objects.hash(texture, offsetX, offsetY,
-                        Float.floatToIntBits(rotationDegrees),
-                        Float.floatToIntBits(zBias),
-                        sideOpaque,
-                        compositeOpaque);
-            }
-        }
+    private record Key(
+            ResourceLocation texture,
+            int offsetX,
+            int offsetY,
+            float rotationDegrees,
+            float zBias,
+            TmtMaskBits sideOpaque,
+            TmtMaskBits compositeOpaque
+    ) {
+    }
 
     public static final class PartMesh {
         private final int id;

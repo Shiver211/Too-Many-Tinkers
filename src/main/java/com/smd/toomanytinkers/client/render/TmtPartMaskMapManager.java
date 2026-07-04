@@ -145,17 +145,10 @@ public final class TmtPartMaskMapManager {
     }
 
     private static ResourceLocation normalizeTextureFile(ResourceLocation texture) {
-        String value = texture.toString();
-        int separator = value.indexOf(':');
-        String domain = separator >= 0 ? value.substring(0, separator) : "minecraft";
-        String path = separator >= 0 ? value.substring(separator + 1) : value;
-        if (!path.startsWith("textures/")) {
-            path = "textures/" + path;
-        }
-        if (!path.endsWith(".png")) {
-            path += ".png";
-        }
-        return new ResourceLocation(domain, path);
+        String path = texture.getPath();
+        if (!path.startsWith("textures/")) path = "textures/" + path;
+        if (!path.endsWith(".png")) path += ".png";
+        return new ResourceLocation(texture.getNamespace(), path);
     }
 
     private static int sampleCoord(int value, int sourceSize, int targetSize) {

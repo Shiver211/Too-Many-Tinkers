@@ -137,11 +137,10 @@ public final class TmtMaterialMapManager {
         }
         if ((size * size) / 2 >= totalUnits) {
             unitColumns = Math.max(1, size / 2);
-            unitRows = size;
         } else {
             unitColumns = size;
-            unitRows = size;
         }
+        unitRows = size;
         width = unitColumns * UNIT_SIZE;
         height = unitRows * UNIT_SIZE;
         slotCount = MATERIALS.size() + SOURCE_TILES.size();
