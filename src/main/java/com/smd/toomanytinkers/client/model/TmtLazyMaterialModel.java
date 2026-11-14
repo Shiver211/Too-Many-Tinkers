@@ -30,7 +30,7 @@ import java.util.function.Function;
  */
 public final class TmtLazyMaterialModel extends BakedMaterialModel {
     private static final WeightedLruCache<Key, IBakedModel> MODELS =
-            new WeightedLruCache<>(4096, 16L * 1024 * 1024, TmtLazyMaterialModel::modelWeight);
+            new WeightedLruCache<>(4096, 16L * 1024 * 1024, BakedModelInspection::estimatedWeight);
     private static final WeightedLruCache<Key, Boolean> REPORTED_FAILURES =
             new WeightedLruCache<>(256, 256, ignored -> 1L);
 
@@ -132,14 +132,6 @@ public final class TmtLazyMaterialModel extends BakedMaterialModel {
     public static String stats() {
         return "lazyModels=" + MODELS.size() + ", estimatedModelBytes=" + MODELS.weight()
                 + ", lazyModelHits=" + hits + ", lazyModelMisses=" + misses;
-    }
-
-    private static long modelWeight(IBakedModel model) {
-        long bytes = 256L;
-        for (BakedQuad quad : model.getQuads(null, null, 0L)) {
-            bytes += 192L + (long) quad.getVertexData().length * Integer.BYTES;
-        }
-        return bytes;
     }
 
     private record Key(TmtLazyMaterialModel owner, String material) { }

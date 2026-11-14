@@ -1,5 +1,6 @@
 package com.smd.toomanytinkers.client.render;
 
+import com.smd.toomanytinkers.client.model.BakedModelInspection;
 import com.smd.toomanytinkers.client.model.WeightedLruCache;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.BufferBuilder;
@@ -63,15 +64,7 @@ public final class TmtNativeQuadRenderer {
     }
 
     public static boolean modelContainsManaged(IBakedModel model) {
-        if (containsManaged(model.getQuads(null, null, 0L))) {
-            return true;
-        }
-        for (EnumFacing side : EnumFacing.VALUES) {
-            if (containsManaged(model.getQuads(null, side, 0L))) {
-                return true;
-            }
-        }
-        return false;
+        return BakedModelInspection.containsTexture(model, NativeMaterialTextures::isManaged);
     }
 
     private static boolean render(IBakedModel model, int color, ItemStack stack,
