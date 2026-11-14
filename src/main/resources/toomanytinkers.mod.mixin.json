@@ -6,10 +6,17 @@
   "target": "@env(MOD)",
   "client": [
     "conarm.DynamicTextureHelperMixin",
+    "avaritia.WrappedItemRendererMixin",
+    "tconevo.TextureMapHandlerMixin",
+    "tconevo.CosmicMaterialRenderInfoMixin",
+    "tconevo.AvaritiaRenderUtilsMixin",
+    "tconevo.DelegateModelCacheMixin",
     "hei.IngredientListBatchRendererMixin",
     "tconstruct.CustomTextureCreatorMixin",
+    "tconstruct.BakedTableModelMixin",
+    "tconstruct.TableRendererDispatcherMixin",
     "tconstruct.MaterialModelMixin",
-    "tconstruct.ToolModelMixin"
+    "tconstruct.ToolItemOverrideListMixin"
   ],
   "mixins": [],
   "server": [],

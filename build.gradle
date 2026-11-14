@@ -57,7 +57,7 @@ unimined.minecraft {
         if (use_access_transformer.toBoolean()) {
             accessTransformer "${rootProject.projectDir}/src/main/resources/$access_transformer_locations"
         }
-        loader "0.5.14-alpha"
+        loader "0.6.13-alpha"
         runs.all {
             systemProperty("crl.dev.mixin", "${mod_id}.default.mixin.json,${mod_id}.mod.mixin.json")
             args += ['--username', minecraft_username]
@@ -100,6 +100,8 @@ dependencies {
     if (enable_junit_testing.toBoolean()) {
         testImplementation 'org.junit.jupiter:junit-jupiter:6.0.3'
         testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+        testRuntimeOnly 'org.lwjgl.lwjgl:lwjgl:2.9.4-nightly-20150209'
+        testRuntimeOnly 'org.lwjgl.lwjgl:lwjgl_util:2.9.4-nightly-20150209'
     }
 }
 
@@ -110,6 +112,10 @@ processResources {
 }
 
 sourceSets {
+    test {
+        compileClasspath += sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.compileClasspath + sourceSets.main.runtimeClasspath
+    }
     main {
         blossom {
             javaSources {

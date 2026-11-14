@@ -1,215 +1,175 @@
 package com.smd.toomanytinkers.client.render;
 
+import com.smd.toomanytinkers.client.texture.NativeSpriteLoader;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
+import net.minecraft.client.renderer.texture.TextureMap;
 import net.minecraft.client.resources.IResource;
 import net.minecraft.util.ResourceLocation;
+import slimeknights.tconstruct.library.TinkerRegistry;
 import slimeknights.tconstruct.library.client.CustomTextureCreator;
-import slimeknights.tconstruct.library.client.MaterialRenderInfo;
 import slimeknights.tconstruct.library.materials.Material;
+import slimeknights.tconstruct.library.materials.MaterialGUI;
 import slimeknights.tconstruct.library.tools.IToolPart;
 
 import javax.annotation.Nullable;
 import javax.imageio.ImageIO;
-import java.awt.Graphics;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
-import java.io.InputStream;
-import java.lang.reflect.Field;
-import java.util.HashMap;
+import java.util.AbstractMap;
+import java.util.AbstractSet;
+import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashSet;
-import java.util.Locale;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/**
- * Immediate material texture bridge. It keeps TiC texture registration metadata
- * but never stores generated image data long-term.
- */
+/** 保留附属使用的原生索引；普通材质按需生成，依赖主图集采样的材质提前注册。 */
 public final class TmtCustomTextureBridge {
-
-    private static final Map<ResourceLocation, Set<IToolPart>> TEXTURE_PARTS = new HashMap<>();
-
-    private TmtCustomTextureBridge() {
-    }
+    private static final Set<String> KNOWN_BASES = new LinkedHashSet<>();
+    private TmtCustomTextureBridge() {}
 
     public static void rebuild(Set<ResourceLocation> baseTextures,
                                Map<ResourceLocation, Set<IToolPart>> texturePartMapping) {
-        TEXTURE_PARTS.clear();
+        NativeMaterialTextures.reload();
         CustomTextureCreator.sprites.clear();
-        for (ResourceLocation base : baseTextures) {
-            Set<IToolPart> parts = texturePartMapping.get(base);
-            if (parts != null && !parts.isEmpty()) {
-                TEXTURE_PARTS.put(base, new LinkedHashSet<>(parts));
+        KNOWN_BASES.clear();
+        TextureMap atlas = Minecraft.getMinecraft().getTextureMapBlocks();
+        Set<String> suffixes = new LinkedHashSet<>();
+        List<Material> atlasMaterials = new ArrayList<>();
+        for (Material material : TinkerRegistry.getAllMaterials()) {
+            if (NativeMaterialTextures.requiresNativeAtlas(material)) atlasMaterials.add(material);
+            if (material.renderInfo != null && material.renderInfo.getTextureSuffix() != null) {
+                suffixes.add(material.renderInfo.getTextureSuffix());
             }
         }
-    }
-
-    public static void clear() {
-        TEXTURE_PARTS.clear();
-        CustomTextureCreator.sprites.clear();
+        for (ResourceLocation base : baseTextures) {
+            if ("minecraft:missingno".equals(base.toString())) continue;
+            atlas.registerSprite(base);
+            for (String suffix : suffixes) {
+                ResourceLocation suffixed = new ResourceLocation(base + "_" + suffix);
+                if (NativeMaterialTextures.exists(suffixed)) atlas.registerSprite(suffixed);
+            }
+            Set<IToolPart> parts = texturePartMapping.get(base);
+            LazyMaterialMap materials = new LazyMaterialMap(base, parts);
+            CustomTextureCreator.sprites.put(base.toString(), materials);
+            for (Material material : atlasMaterials) {
+                if (materials.usable(material)) NativeMaterialTextures.registerAtlasMaterial(base, material, atlas);
+            }
+            KNOWN_BASES.add(base.toString());
+        }
     }
 
     @Nullable
+    static TextureAtlasSprite lookupMaterialSprite(String fullName) {
+        String selectedBase = null;
+        String selectedMaterial = null;
+        for (String base : KNOWN_BASES) {
+            if (!fullName.startsWith(base + "_")) continue;
+            String identifier = fullName.substring(base.length() + 1);
+            Map<String, TextureAtlasSprite> materials = CustomTextureCreator.sprites.get(base);
+            if (materials != null && materials.containsKey(identifier)
+                    && (selectedBase == null || base.length() > selectedBase.length())) {
+                selectedBase = base;
+                selectedMaterial = identifier;
+            }
+        }
+        return selectedBase == null ? null : CustomTextureCreator.sprites.get(selectedBase).get(selectedMaterial);
+    }
+
     public static BufferedImage createMaterialImage(String baseTextureName, Material material) {
-        String materialTexture = baseTextureName + "_" + material.identifier;
-        BufferedImage direct = loadImage(materialTexture);
-        if (direct != null) {
-            return direct;
-        }
-
-        ResourceLocation baseTexture = new ResourceLocation(baseTextureName);
-        MaterialRenderInfo info = material.renderInfo;
-        if (info != null && info.getTextureSuffix() != null) {
-            String suffixed = baseTextureName + "_" + info.getTextureSuffix();
-            if (textureExists(suffixed)) {
-                baseTexture = new ResourceLocation(suffixed);
-            }
-        }
-
-        BufferedImage base = loadImage(baseTexture);
-        if (base == null) {
-            return null;
-        }
-        if (info == null || info.useVertexColoring()) {
-            return base;
-        }
-
-        BufferedImage extra = resolveExtraImage(info);
-        BufferedImage output = new BufferedImage(base.getWidth(), base.getHeight(), BufferedImage.TYPE_4BYTE_ABGR);
-        boolean metal = info.getClass().getName().contains("Metal");
-        for (int y = 0; y < base.getHeight(); y++) {
-            for (int x = 0; x < base.getWidth(); x++) {
-                int argb = base.getRGB(x, y);
-                int alpha = (argb >>> 24) & 0xff;
-                if (alpha == 0) {
-                    output.setRGB(x, y, argb);
-                    continue;
-                }
-
-                int source = argb;
-                if (extra != null) {
-                    int texel = extra.getRGB(x % extra.getWidth(), y % extra.getHeight());
-                    int r = mult(mult((texel >> 16) & 0xff, (argb >> 16) & 0xff), (argb >> 16) & 0xff);
-                    int g = mult(mult((texel >> 8) & 0xff, (argb >> 8) & 0xff), (argb >> 8) & 0xff);
-                    int b = mult(mult(texel & 0xff, argb & 0xff), argb & 0xff);
-                    source = (alpha << 24) | (r << 16) | (g << 8) | b;
-                    if (!metal) {
-                        output.setRGB(x, y, source);
-                        continue;
-                    }
-                }
-
-                int gray = perceptualBrightness(source);
-                int colored = MaterialColorEvaluator.evaluate(material, gray / 255f);
-                output.setRGB(x, y, (alpha << 24) | (colored & 0x00ffffff));
-            }
-        }
-        return output;
+        return NativeMaterialTextures.materialImage(new ResourceLocation(baseTextureName), material);
     }
 
     @Nullable
     public static BufferedImage createTextureImage(String textureName) {
-        return loadImage(textureName);
-    }
-
-    public static boolean textureExists(String textureName) {
-        ResourceLocation file = normalizeTextureFile(new ResourceLocation(textureName));
-        try {
-            java.util.List<IResource> resources = Minecraft.getMinecraft().getResourceManager().getAllResources(file);
-            for (IResource resource : resources) {
-                try {
-                    resource.close();
-                } catch (IOException ignored) {
-                }
-            }
-            return !resources.isEmpty();
-        } catch (IOException ignored) {
-            return false;
-        }
-    }
-
-    @Nullable
-    private static BufferedImage loadImage(String textureName) {
-        return loadImage(new ResourceLocation(textureName));
-    }
-
-    @Nullable
-    private static BufferedImage loadImage(ResourceLocation texture) {
-        ResourceLocation file = normalizeTextureFile(texture);
-        try (InputStream stream = Minecraft.getMinecraft().getResourceManager().getResource(file).getInputStream()) {
-            BufferedImage image = ImageIO.read(stream);
-            if (image == null || image.getWidth() <= 0 || image.getHeight() <= 0) {
-                return null;
-            }
-            BufferedImage copy = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_4BYTE_ABGR);
-            Graphics graphics = copy.getGraphics();
-            graphics.drawImage(image, 0, 0, null);
-            graphics.dispose();
-            return copy;
-        } catch (IOException ignored) {
+        try (IResource resource = Minecraft.getMinecraft().getResourceManager()
+                .getResource(NativeSpriteLoader.textureFile(new ResourceLocation(textureName)))) {
+            return ImageIO.read(resource.getInputStream());
+        } catch (IOException missing) {
             return null;
         }
     }
 
-    @Nullable
-    private static BufferedImage resolveExtraImage(MaterialRenderInfo info) {
-        ResourceLocation texture = readResourceLocation(info, "texturePath");
-        if (texture == null) {
-            texture = readResourceLocation(info, "extraTexture");
+    public static boolean textureExists(String textureName) {
+        return NativeMaterialTextures.exists(new ResourceLocation(textureName));
+    }
+
+    private static final class LazyMaterialMap extends AbstractMap<String, TextureAtlasSprite> {
+        private final ResourceLocation base;
+        private final Set<IToolPart> parts;
+        private final boolean gui;
+        private boolean cleared;
+
+        private LazyMaterialMap(ResourceLocation base, @Nullable Set<IToolPart> parts) {
+            this.base = base;
+            this.parts = parts == null ? null : new LinkedHashSet<>(parts);
+            this.gui = CustomTextureCreator.belongsToToolPart(base);
         }
-        return texture == null ? null : loadImage(texture);
-    }
 
-    private static ResourceLocation normalizeTextureFile(ResourceLocation texture) {
-        String path = texture.getPath();
-        if (!path.startsWith("textures/")) {
-            path = "textures/" + path;
+        @Override public TextureAtlasSprite get(Object key) {
+            Material material = material(key);
+            return material == null ? null : create(material);
         }
-        if (!path.endsWith(".png")) {
-            path += ".png";
+
+        private Material material(Object key) {
+            if (cleared) return null;
+            if (!(key instanceof String identifier)) return null;
+            Material material = CustomTextureCreator.guiMaterial.identifier.equals(identifier)
+                    ? CustomTextureCreator.guiMaterial : TinkerRegistry.getMaterial(identifier);
+            if (!material.identifier.equals(identifier) || !usable(material)) return null;
+            return material;
         }
-        return new ResourceLocation(texture.getNamespace(), path);
-    }
 
-    private static int perceptualBrightness(int argb) {
-        double r = ((argb >> 16) & 0xff) / 255.0;
-        double g = ((argb >> 8) & 0xff) / 255.0;
-        double b = (argb & 0xff) / 255.0;
-        return clamp255((int) (Math.sqrt(0.241 * r * r + 0.691 * g * g + 0.068 * b * b) * 255));
-    }
-
-    private static int mult(int a, int b) {
-        return clamp255((int) (a * (b / 255f)));
-    }
-
-    private static int clamp255(int value) {
-        return Math.clamp(value, 0, 255);
-    }
-
-    @Nullable
-    private static ResourceLocation readResourceLocation(Object instance, String name) {
-        Object value = readField(instance, name);
-        if (value instanceof ResourceLocation) {
-            return (ResourceLocation) value;
+        private boolean usable(Material material) {
+            if (material.renderInfo == null) return NativeMaterialTextures.exists(new ResourceLocation(base + "_" + material.identifier));
+            if (material == CustomTextureCreator.guiMaterial) return gui;
+            if (parts == null || material instanceof MaterialGUI) return true;
+            for (IToolPart part : parts) if (part.canUseMaterialForRendering(material)) return true;
+            return false;
         }
-        if (value instanceof String) {
-            return new ResourceLocation(((String) value).toLowerCase(Locale.ROOT));
-        }
-        return null;
-    }
 
-    @Nullable
-    private static Object readField(Object instance, String name) {
-        Class<?> type = instance.getClass();
-        while (type != null) {
-            try {
-                Field field = type.getDeclaredField(name);
-                field.setAccessible(true);
-                return field.get(instance);
-            } catch (ReflectiveOperationException ignored) {
-                type = type.getSuperclass();
+        private List<Material> materials() {
+            List<Material> result = new ArrayList<>();
+            if (cleared) return result;
+            for (Material material : TinkerRegistry.getAllMaterials()) if (usable(material)) result.add(material);
+            if (gui && !result.contains(CustomTextureCreator.guiMaterial)) result.add(CustomTextureCreator.guiMaterial);
+            return result;
+        }
+
+        private TextureAtlasSprite create(Material material) {
+            try (NativeMaterialTextures.MaterialTexture texture = NativeMaterialTextures.acquire(base, material)) {
+                TextureAtlasSprite sprite = texture.sprite();
+                // Default 的查询仍返回主图集对象；临时几何帧只归烘焙 lease 所有。
+                return NativeMaterialTextures.hasRecipe(sprite) ? sprite
+                        : Minecraft.getMinecraft().getTextureMapBlocks().getAtlasSprite(sprite.getIconName());
             }
         }
-        return null;
+
+        @Override public boolean containsKey(Object key) {
+            return material(key) != null;
+        }
+
+        @Override public int size() { return materials().size(); }
+
+        /** 原生资源重载会对每个内层 Map 调用 clear，不触发懒生成或迭代删除。 */
+        @Override public void clear() { cleared = true; }
+
+        @Override public Set<Entry<String, TextureAtlasSprite>> entrySet() {
+            return new AbstractSet<>() {
+                @Override public int size() { return LazyMaterialMap.this.size(); }
+                @Override public Iterator<Entry<String, TextureAtlasSprite>> iterator() {
+                    Iterator<Material> iterator = materials().iterator();
+                    return new Iterator<>() {
+                        @Override public boolean hasNext() { return iterator.hasNext(); }
+                        @Override public Entry<String, TextureAtlasSprite> next() {
+                            Material material = iterator.next();
+                            return new SimpleImmutableEntry<>(material.identifier, create(material));
+                        }
+                    };
+                }
+            };
+        }
     }
 }

@@ -5,7 +5,9 @@
   "compatibilityLevel": "JAVA_8",
   "target": "@env(DEFAULT)",
   "client": [
-    "minecraft.RenderItemMixin"
+    "minecraft.RenderItemMixin",
+    "minecraft.TextureAtlasSpriteMixin",
+    "minecraft.TextureMapMixin"
   ],
   "mixins": [],
   "server": [],
