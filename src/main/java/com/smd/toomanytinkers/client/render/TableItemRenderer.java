@@ -43,14 +43,6 @@ public final class TableItemRenderer extends TileEntitySpecialRenderer<TileTable
         return item.model != null && TmtNativeQuadRenderer.modelContainsManaged(item.model);
     }
 
-    public static boolean hasDynamicItems(TileTable table) {
-        IExtendedBlockState state = displayState(table);
-        if (state == null) return false;
-        TableItems items = state.getValue(BlockTable.INVENTORY);
-        if (items != null) for (TableItem item : items.items) if (isDynamic(item)) return true;
-        return false;
-    }
-
     @Nullable
     private static IExtendedBlockState displayState(TileTable table) {
         if (!Config.renderTableItems || table.getWorld() == null) return null;

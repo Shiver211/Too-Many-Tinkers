@@ -12,10 +12,12 @@ import slimeknights.tconstruct.shared.tileentity.TileTable;
 
 @Mixin(TileEntityRendererDispatcher.class)
 public abstract class TableRendererDispatcherMixin {
-    @Inject(method = "getRenderer(Lnet/minecraft/tileentity/TileEntity;)Lnet/minecraft/client/renderer/tileentity/TileEntitySpecialRenderer;",
+    @Inject(method = "getRenderer(Ljava/lang/Class;)Lnet/minecraft/client/renderer/tileentity/TileEntitySpecialRenderer;",
             at = @At("RETURN"), cancellable = true)
-    private void tmt$tableItems(TileEntity tile, CallbackInfoReturnable<TileEntitySpecialRenderer<?>> cir) {
-        if (tile instanceof TileTable table && TableItemRenderer.hasDynamicItems(table)) {
+    private void tmt$tableItems(Class<? extends TileEntity> type, CallbackInfoReturnable<TileEntitySpecialRenderer<?>> cir) {
+        // RenderLib 首次查询后会缓存 renderer；空台面也必须取得同一个包装器。
+        // 是否有动态物品在 render 时判断，浇筑完成后不依赖重新查询 renderer。
+        if (TileTable.class.isAssignableFrom(type)) {
             cir.setReturnValue(TableItemRenderer.wrap(cir.getReturnValue(), (TileEntityRendererDispatcher) (Object) this));
         }
     }

@@ -6,6 +6,7 @@
   "target": "@env(MOD)",
   "client": [
     "conarm.DynamicTextureHelperMixin",
+    "tt2.ScoutArmorTextureMixin",
     "avaritia.WrappedItemRendererMixin",
     "tconevo.TextureMapHandlerMixin",
     "tconevo.CosmicMaterialRenderInfoMixin",

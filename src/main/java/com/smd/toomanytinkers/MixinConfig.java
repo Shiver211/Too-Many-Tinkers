@@ -32,6 +32,7 @@ public class MixinConfig implements IMixinConfigPlugin {
         return switch (mixinClassName.split("\\.")[5]) {
             case "hei" -> Loader.isModLoaded("jei");
             case "conarm" -> Loader.isModLoaded("conarm");
+            case "tt2" -> Loader.isModLoaded("tt2");
             case "tconevo" -> Loader.isModLoaded("tconevo");
             case "avaritia" -> Loader.isModLoaded("avaritia");
             default -> true;
