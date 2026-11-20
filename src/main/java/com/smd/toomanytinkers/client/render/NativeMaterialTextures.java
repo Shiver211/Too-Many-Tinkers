@@ -34,6 +34,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
+import java.util.function.Function;
 
 /**
  * 原生材质输出的按需所有者。动态页模型保留规范化 UV 和弱登记的生成配方；
@@ -198,10 +199,16 @@ public final class NativeMaterialTextures {
     }
 
     private static TextureAtlasSprite atlasSprite(ResourceLocation location) {
+        return directAtlasLookup(location, Minecraft.getMinecraft().getTextureMapBlocks()::getAtlasSprite);
+    }
+
+    /** 查源贴图时禁用按需回退，否则生成的材质可能被误认为自己的底图。 */
+    @Nullable
+    private static TextureAtlasSprite directAtlasLookup(ResourceLocation location, Function<String, TextureAtlasSprite> lookup) {
         boolean previous = LOOKUP_GUARD.get();
         LOOKUP_GUARD.set(true);
         try {
-            return Minecraft.getMinecraft().getTextureMapBlocks().getAtlasSprite(location.toString());
+            return lookup.apply(location.toString());
         } finally {
             if (previous) LOOKUP_GUARD.set(true);
             else LOOKUP_GUARD.remove();
@@ -384,15 +391,16 @@ public final class NativeMaterialTextures {
         TextureMap atlas = mc.getTextureMapBlocks();
         return new NativeSpriteLoader(mc.getResourceManager(), location -> {
             if (location.toString().equals(atlas.getMissingSprite().getIconName())) return atlas.getMissingSprite();
-            return atlas.getTextureExtry(location.toString());
+            return directAtlasLookup(location, atlas::getTextureExtry);
         }, atlas.getMipmapLevels());
     }
 
     private static ResourceLocation selectBase(ResourceLocation base, @Nullable MaterialRenderInfo info) {
         if (info == null || info.getTextureSuffix() == null) return base;
         ResourceLocation suffixed = new ResourceLocation(base + "_" + info.getTextureSuffix());
-        TextureAtlasSprite registered = Minecraft.getMinecraft().getTextureMapBlocks().getTextureExtry(suffixed.toString());
-        return registered != null || exists(suffixed) ? suffixed : base;
+        if (exists(suffixed)) return suffixed;
+        TextureMap atlas = Minecraft.getMinecraft().getTextureMapBlocks();
+        return directAtlasLookup(suffixed, atlas::getTextureExtry) != null ? suffixed : base;
     }
 
     public static synchronized boolean exists(ResourceLocation texture) {
