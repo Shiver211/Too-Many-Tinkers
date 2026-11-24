@@ -20,6 +20,7 @@ import java.util.function.Function;
  * 及其依赖顺序均由原对象执行，不从类名猜测颜色算法。
  */
 public final class NativeSpriteLoader {
+    private static final ResourceLocation MISSING_TEXTURE = new ResourceLocation("missingno");
     private final IResourceManager resources;
     private final Function<ResourceLocation, TextureAtlasSprite> registered;
     private final int mipLevels;
@@ -55,7 +56,7 @@ public final class NativeSpriteLoader {
             register(sprite);
         } catch (IOException missingFile) {
             sprite = registered.apply(location);
-            if (sprite == null) throw new IllegalStateException("纹理依赖不存在：" + location, missingFile);
+            if (sprite == null) return missingSource(location);
             sprites.put(location, sprite);
             if (sprite.getFrameCount() > 0) {
                 loaded.add(sprite);
@@ -63,7 +64,7 @@ public final class NativeSpriteLoader {
             }
             // 自定义依赖只有原对象能够重新加载；保留它的主图集坐标。
             if (!sprite.hasCustomLoader(resources, textureFile(location))) {
-                throw new IllegalStateException("纹理依赖既无 PNG 也无自定义加载器：" + location, missingFile);
+                return missingSource(location);
             }
             if (sprite.getIconWidth() > 0 && sprite.getMaxU() > sprite.getMinU()) {
                 previousCoordinates = raw(location);
@@ -105,16 +106,42 @@ public final class NativeSpriteLoader {
                 }
             }
             if (sprite.getFrameCount() == 0) {
-                throw new IllegalStateException("原生纹理加载器未生成帧：" + sprite.getIconName());
+                // 原生 TextureMap 会将未成功生成的 sprite 回退到 missingno。
+                // 动态页还需要可上传的帧；列表独立，释放时不会清空主图集的缺失纹理。
+                TextureAtlasSprite missing = source(MISSING_TEXTURE);
+                sprite.copyFrom(missing);
+                List<int[][]> frames = new ArrayList<>();
+                for (int i = 0; i < missing.getFrameCount(); i++) frames.add(missing.getFrameTextureData(i));
+                sprite.setFramesTextureData(frames);
+            } else if (mipLevels > 0) {
+                // load 已经提供原始第 0 级；回退帧复用主图集已有的 mipmap。
+                sprite.generateMipmaps(mipLevels);
             }
-            // load 已经提供原始第 0 级；关闭 mipmap 时不再复制帧容器或进入 GL 工具类。
-            if (mipLevels > 0) sprite.generateMipmaps(mipLevels);
             loaded.add(sprite);
         } catch (IOException exception) {
             throw new IllegalStateException("加载原生纹理失败：" + sprite.getIconName(), exception);
         } finally {
             loading.remove(sprite);
         }
+    }
+
+    private TextureAtlasSprite missingSource(ResourceLocation location) {
+        TextureAtlasSprite missing = sprites.computeIfAbsent(MISSING_TEXTURE, registered);
+        sprites.put(location, missing);
+        loaded.add(missing);
+        return missing;
+    }
+
+    /** LoliASM 可能已释放 missingno 的帧；只恢复本次加载需要的副本。 */
+    public static TextureAtlasSprite recoverMissingSprite(TextureAtlasSprite atlasSprite, int[] pixels, int mipLevels) {
+        if (atlasSprite.getFrameCount() > 0) return atlasSprite;
+        TextureAtlasSprite recovered = raw(new ResourceLocation(atlasSprite.getIconName()));
+        recovered.copyFrom(atlasSprite);
+        List<int[][]> frames = new ArrayList<>();
+        frames.add(new int[][]{pixels.clone()});
+        recovered.setFramesTextureData(frames);
+        if (mipLevels > 0) recovered.generateMipmaps(mipLevels);
+        return recovered;
     }
 
     public List<TextureAtlasSprite> ownedSprites() {

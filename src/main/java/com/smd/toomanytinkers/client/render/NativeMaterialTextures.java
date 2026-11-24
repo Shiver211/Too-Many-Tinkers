@@ -390,7 +390,10 @@ public final class NativeMaterialTextures {
         Minecraft mc = Minecraft.getMinecraft();
         TextureMap atlas = mc.getTextureMapBlocks();
         return new NativeSpriteLoader(mc.getResourceManager(), location -> {
-            if (location.toString().equals(atlas.getMissingSprite().getIconName())) return atlas.getMissingSprite();
+            if (location.toString().equals(atlas.getMissingSprite().getIconName())) {
+                return NativeSpriteLoader.recoverMissingSprite(atlas.getMissingSprite(),
+                        TextureUtil.MISSING_TEXTURE_DATA, atlas.getMipmapLevels());
+            }
             return directAtlasLookup(location, atlas::getTextureExtry);
         }, atlas.getMipmapLevels());
     }
