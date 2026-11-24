@@ -109,7 +109,10 @@ public final class NativeMaterialTextures {
         }
     }
 
-    public static synchronized void beginStitch() { atlasReady = false; }
+    public static synchronized void beginStitch() {
+        atlasReady = false;
+        TmtCustomTextureBridge.clearBaseIndex();
+    }
     public static synchronized void finishStitch() {
         nativeAtlasPixelBytes = 0;
         TextureMap atlas = Minecraft.getMinecraft().getTextureMapBlocks();
@@ -120,6 +123,7 @@ public final class NativeMaterialTextures {
             }
         }
         atlasReady = true;
+        TmtCustomTextureBridge.publishBaseIndex();
         TooManyTinkers.LOGGER.info("TMT 主图集已就绪：generation={}, nativeAtlasSprites={}, nativeAtlasPixelBytes={}",
                 generation, ATLAS_MATERIAL_SPRITES.size(), nativeAtlasPixelBytes);
     }
@@ -187,14 +191,17 @@ public final class NativeMaterialTextures {
 
     /** 仅作为已注册匠魂纹理的缺省查找，不将生成对象塞回主图集的强引用表。 */
     @Nullable
-    public static synchronized TextureAtlasSprite lookupMaterialSprite(String fullName) {
-        // StitcherCache 会在 atlas 尺寸和依赖帧未就绪时查询，不能返回虚拟 sprite。
-        if (!atlasReady || LOOKUP_GUARD.get()) return null;
-        LOOKUP_GUARD.set(true);
-        try {
-            return TmtCustomTextureBridge.lookupMaterialSprite(fullName);
-        } finally {
-            LOOKUP_GUARD.remove();
+    public static TextureAtlasSprite lookupMaterialSprite(String fullName) {
+        if (LOOKUP_GUARD.get() || !TmtCustomTextureBridge.hasMaterialSpriteCandidate(fullName)) return null;
+        synchronized (NativeMaterialTextures.class) {
+            // 等锁期间可能开始重载；StitcherCache 也不能拿到尚未就绪的虚拟 sprite。
+            if (!atlasReady) return null;
+            LOOKUP_GUARD.set(true);
+            try {
+                return TmtCustomTextureBridge.lookupMaterialSprite(fullName);
+            } finally {
+                LOOKUP_GUARD.remove();
+            }
         }
     }
 
@@ -321,6 +328,7 @@ public final class NativeMaterialTextures {
 
     public static synchronized void reload() {
         atlasReady = false;
+        TmtCustomTextureBridge.clearBaseIndex();
         clearGpu();
         RECIPES.clear();
         ATLAS_MATERIAL_SPRITES.clear();

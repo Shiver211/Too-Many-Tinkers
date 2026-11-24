@@ -28,6 +28,7 @@ import java.util.Set;
 /** 保留附属使用的原生索引；普通材质按需生成，依赖主图集采样的材质提前注册。 */
 public final class TmtCustomTextureBridge {
     private static final Set<String> KNOWN_BASES = new LinkedHashSet<>();
+    private static volatile Set<String> publishedBases = Set.of();
     private TmtCustomTextureBridge() {}
 
     public static void rebuild(Set<ResourceLocation> baseTextures,
@@ -59,6 +60,22 @@ public final class TmtCustomTextureBridge {
             }
             KNOWN_BASES.add(base.toString());
         }
+    }
+
+    /** 仅由主图集生命周期在 NativeMaterialTextures 的锁内清除/发布。 */
+    static void clearBaseIndex() { publishedBases = Set.of(); }
+
+    static void publishBaseIndex() { publishedBases = Set.copyOf(KNOWN_BASES); }
+
+    /** 只检查名称，不读取材质或资源；成本取决于查询名称，而非已登记底图数。 */
+    static boolean hasMaterialSpriteCandidate(String fullName) {
+        Set<String> bases = publishedBases;
+        if (bases.isEmpty()) return false;
+        for (int separator = fullName.lastIndexOf('_'); separator >= 0;
+             separator = fullName.lastIndexOf('_', separator - 1)) {
+            if (bases.contains(fullName.substring(0, separator))) return true;
+        }
+        return false;
     }
 
     @Nullable
