@@ -15,6 +15,10 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -33,6 +37,86 @@ class NativeSpriteLoaderTest {
             throw new FileNotFoundException(location.toString());
         }
     };
+
+    @Test void sharedCustomDependencyKeepsRestoredFramesUntilLastLoaderCloses() {
+        AtomicInteger loads = new AtomicInteger();
+        TextureAtlasSprite shared = new RestoredDependency(() -> loads.incrementAndGet());
+        shared.setIconWidth(2);
+        shared.setIconHeight(2);
+        shared.initSprite(16, 16, 4, 8, false);
+        float minU = shared.getMinU();
+        float minV = shared.getMinV();
+        NativeSpriteLoader first = new NativeSpriteLoader(NO_RESOURCES, ignored -> shared, 0);
+        NativeSpriteLoader second = new NativeSpriteLoader(NO_RESOURCES, ignored -> shared, 0);
+        assertSame(shared, first.source(BASE));
+        assertSame(shared, second.source(BASE));
+        assertEquals(1, loads.get());
+        assertEquals(minU, shared.getMinU());
+        assertEquals(minV, shared.getMinV());
+        first.close();
+        assertEquals(1, shared.getFrameCount());
+        second.close();
+        assertEquals(0, shared.getFrameCount());
+        try (NativeSpriteLoader third = new NativeSpriteLoader(NO_RESOURCES, ignored -> shared, 0)) {
+            assertSame(shared, third.source(BASE));
+            assertEquals(2, loads.get());
+        }
+        assertEquals(0, shared.getFrameCount());
+    }
+
+    @Test void failedSharedRestoreCanBeRetriedWithoutLeakingPartialFrames() {
+        AtomicInteger attempts = new AtomicInteger();
+        TextureAtlasSprite shared = new RestoredDependency(() -> {
+            if (attempts.getAndIncrement() == 0) throw new IllegalStateException("模拟共享依赖加载失败");
+        });
+        try (NativeSpriteLoader first = new NativeSpriteLoader(NO_RESOURCES, ignored -> shared, 0)) {
+            assertThrows(IllegalStateException.class, () -> first.source(BASE));
+        }
+        assertEquals(0, shared.getFrameCount());
+        try (NativeSpriteLoader second = new NativeSpriteLoader(NO_RESOURCES, ignored -> shared, 0)) {
+            assertSame(shared, second.source(BASE));
+            assertEquals(1, shared.getFrameCount());
+        }
+        assertEquals(0, shared.getFrameCount());
+    }
+
+    @Test void concurrentSharedRestoreExecutesCustomCallbackOnce() throws Exception {
+        AtomicInteger loads = new AtomicInteger();
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch resume = new CountDownLatch(1);
+        TextureAtlasSprite shared = new RestoredDependency(() -> {
+            loads.incrementAndGet();
+            entered.countDown();
+            try { assertTrue(resume.await(5, TimeUnit.SECONDS)); }
+            catch (InterruptedException interrupted) { throw new AssertionError(interrupted); }
+        });
+        try (var workers = Executors.newFixedThreadPool(2);
+             NativeSpriteLoader first = new NativeSpriteLoader(NO_RESOURCES, ignored -> shared, 0);
+             NativeSpriteLoader second = new NativeSpriteLoader(NO_RESOURCES, ignored -> shared, 0)) {
+            var a = workers.submit(() -> first.source(BASE));
+            assertTrue(entered.await(2, TimeUnit.SECONDS));
+            var b = workers.submit(() -> second.source(BASE));
+            resume.countDown();
+            assertSame(shared, a.get(2, TimeUnit.SECONDS));
+            assertSame(shared, b.get(2, TimeUnit.SECONDS));
+            assertEquals(1, loads.get());
+        } finally { resume.countDown(); }
+        assertEquals(0, shared.getFrameCount());
+    }
+
+    private static final class RestoredDependency extends TextureAtlasSprite {
+        private final Runnable loaded;
+        RestoredDependency(Runnable loaded) { super(BASE.toString()); this.loaded = loaded; }
+        @Override public boolean hasCustomLoader(IResourceManager manager, ResourceLocation location) { return true; }
+        @Override public boolean load(IResourceManager manager, ResourceLocation location,
+                                      Function<ResourceLocation, TextureAtlasSprite> dependencies) {
+            setIconWidth(2);
+            setIconHeight(2);
+            setFramesTextureData(new ArrayList<>(Collections.singletonList(new int[][]{new int[]{-1, -1, -1, -1}})));
+            loaded.run();
+            return false;
+        }
+    }
 
     @Test void nativeMultiColorUsesTheActualPartBrightnessRange() {
         NativeSpriteLoader loader = new NativeSpriteLoader(null, ignored -> null, 0);

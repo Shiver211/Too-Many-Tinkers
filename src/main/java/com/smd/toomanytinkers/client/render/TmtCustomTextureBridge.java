@@ -19,11 +19,13 @@ import java.io.IOException;
 import java.util.AbstractMap;
 import java.util.AbstractSet;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 
 /** 保留附属使用的原生索引；普通材质按需生成，依赖主图集采样的材质提前注册。 */
 public final class TmtCustomTextureBridge {
@@ -79,20 +81,24 @@ public final class TmtCustomTextureBridge {
     }
 
     @Nullable
-    static TextureAtlasSprite lookupMaterialSprite(String fullName) {
-        String selectedBase = null;
-        String selectedMaterial = null;
+    static Function<String, TextureAtlasSprite> materialSpriteLookup(String fullName) {
+        List<Map.Entry<String, Map<String, TextureAtlasSprite>>> candidates = new ArrayList<>();
         for (String base : KNOWN_BASES) {
             if (!fullName.startsWith(base + "_")) continue;
-            String identifier = fullName.substring(base.length() + 1);
             Map<String, TextureAtlasSprite> materials = CustomTextureCreator.sprites.get(base);
-            if (materials != null && materials.containsKey(identifier)
-                    && (selectedBase == null || base.length() > selectedBase.length())) {
-                selectedBase = base;
-                selectedMaterial = identifier;
-            }
+            if (materials != null) candidates.add(new AbstractMap.SimpleImmutableEntry<>(base, materials));
         }
-        return selectedBase == null ? null : CustomTextureCreator.sprites.get(selectedBase).get(selectedMaterial);
+        if (candidates.isEmpty()) return null;
+        candidates.sort(Comparator.comparingInt((Map.Entry<String, Map<String, TextureAtlasSprite>> entry)
+                -> entry.getKey().length()).reversed());
+        // 锁内只取得当前底图/材质表引用；可用性检查和懒生成在锁外执行。
+        return name -> {
+            for (var candidate : candidates) {
+                String identifier = name.substring(candidate.getKey().length() + 1);
+                if (candidate.getValue().containsKey(identifier)) return candidate.getValue().get(identifier);
+            }
+            return null;
+        };
     }
 
     public static BufferedImage createMaterialImage(String baseTextureName, Material material) {

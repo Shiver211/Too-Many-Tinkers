@@ -27,7 +27,6 @@ import javax.annotation.Nullable;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -47,15 +46,14 @@ public final class NativeMaterialTextures {
     private static final long ANIMATION_BUDGET = 32L * 1024 * 1024;
     private static final int ALIAS_LIMIT = 16_384;
     private static final Map<TextureAtlasSprite, Recipe> RECIPES = new WeakHashMap<>();
+    private static final Map<TextureAtlasSprite, FrameUse> FRAME_USES = new WeakHashMap<>();
     private static final Map<Recipe, Resident> RESIDENT = boundedAliases();
     private static final Map<PixelContentKey, Resident> CONTENT = boundedAliases();
     private static final Set<String> ATLAS_MATERIAL_SPRITES = new HashSet<>();
-    private static final LinkedHashMap<MaterialKey, Bundle> PREPARED = new LinkedHashMap<>(16, .75f, true);
     private static final List<Page> PAGES = new ArrayList<>();
     private static final ThreadLocal<List<TextureAtlasSprite>> AUXILIARY = new ThreadLocal<>();
     private static final ThreadLocal<Boolean> LOOKUP_GUARD = ThreadLocal.withInitial(() -> false);
     private static final LinkedHashMap<ResourceLocation, Boolean> EXISTS = new LinkedHashMap<>(16, .75f, true);
-    private static long preparedBytes;
     private static long animationBytes;
     private static long gpuBytes;
     private static long peakGpuBytes;
@@ -70,6 +68,10 @@ public final class NativeMaterialTextures {
     private static int generation;
     private static boolean atlasReady;
     private static long nativeAtlasPixelBytes;
+    private static TextureContext textureContext;
+    private static final LeasedTextureCache<MaterialKey, Bundle> PREPARED = new LeasedTextureCache<>(
+            NativeMaterialTextures.class, PREPARED_BUDGET, bundle -> bundle.bytes,
+            key -> key.generation == generation, NativeMaterialTextures::publishBundle, Bundle::dispose);
 
     private NativeMaterialTextures() {}
 
@@ -91,17 +93,22 @@ public final class NativeMaterialTextures {
     }
 
     /** 只注册有主图集采样契约的材质，加载/动画/上传仍由原生 TextureMap 执行。 */
-    public static synchronized void registerAtlasMaterial(ResourceLocation base, Material material, TextureMap atlas) {
+    public static void registerAtlasMaterial(ResourceLocation base, Material material, TextureMap atlas) {
+        TextureContext context = context();
+        TextureRequest request = request(context, base, material);
         List<TextureAtlasSprite> captured = new ArrayList<>();
         List<TextureAtlasSprite> previous = AUXILIARY.get();
         AUXILIARY.set(captured);
         try {
-            TextureAtlasSprite primary = createPrimary(base, material);
-            atlas.setTextureEntry(primary);
-            ATLAS_MATERIAL_SPRITES.add(primary.getIconName());
-            for (TextureAtlasSprite auxiliary : captured) {
-                atlas.setTextureEntry(auxiliary);
-                ATLAS_MATERIAL_SPRITES.add(auxiliary.getIconName());
+            TextureAtlasSprite primary = createPrimary(request);
+            synchronized (NativeMaterialTextures.class) {
+                ensureCurrent(context);
+                atlas.setTextureEntry(primary);
+                ATLAS_MATERIAL_SPRITES.add(primary.getIconName());
+                for (TextureAtlasSprite auxiliary : captured) {
+                    atlas.setTextureEntry(auxiliary);
+                    ATLAS_MATERIAL_SPRITES.add(auxiliary.getIconName());
+                }
             }
         } finally {
             if (previous == null) AUXILIARY.remove();
@@ -109,15 +116,22 @@ public final class NativeMaterialTextures {
         }
     }
 
-    public static synchronized void beginStitch() {
-        atlasReady = false;
-        TmtCustomTextureBridge.clearBaseIndex();
+    public static void beginStitch() {
+        List<Bundle> expired;
+        synchronized (NativeMaterialTextures.class) {
+            atlasReady = false;
+            generation++;
+            textureContext = null;
+            TmtCustomTextureBridge.clearBaseIndex();
+            expired = PREPARED.invalidate();
+        }
+        expired.forEach(Bundle::dispose);
     }
     public static synchronized void finishStitch() {
         nativeAtlasPixelBytes = 0;
         TextureMap atlas = Minecraft.getMinecraft().getTextureMapBlocks();
         for (String name : ATLAS_MATERIAL_SPRITES) {
-            TextureAtlasSprite sprite = atlasSprite(new ResourceLocation(name));
+            TextureAtlasSprite sprite = atlasSprite(context(), new ResourceLocation(name));
             if (name.equals(sprite.getIconName())) {
                 nativeAtlasPixelBytes += mipBytes(sprite.getIconWidth(), sprite.getIconHeight(), atlas.getMipmapLevels());
             }
@@ -128,58 +142,79 @@ public final class NativeMaterialTextures {
                 generation, ATLAS_MATERIAL_SPRITES.size(), nativeAtlasPixelBytes);
     }
 
-    public static synchronized MaterialTexture resolve(ResourceLocation base, String materialId) {
-        Material gui = slimeknights.tconstruct.library.client.CustomTextureCreator.guiMaterial;
-        return acquire(base, gui.identifier.equals(materialId) ? gui : TinkerRegistry.getMaterial(materialId));
+    public static MaterialTexture resolve(ResourceLocation base, String materialId) {
+        return acquire(base, material(materialId));
     }
 
     /** 模型在首次 bake 时已保存未染色几何；共享材质不再次读取 PNG。 */
-    public static synchronized MaterialTexture resolveForModel(ResourceLocation base, String materialId) {
-        Material gui = slimeknights.tconstruct.library.client.CustomTextureCreator.guiMaterial;
-        Material material = gui.identifier.equals(materialId) ? gui : TinkerRegistry.getMaterial(materialId);
-        if (isShared(material) && !exists(new ResourceLocation(base + "_" + material.identifier))
-                && selectBase(base, material.renderInfo).equals(base)) {
-            TextureAtlasSprite sprite = atlasSprite(base);
-            if (sprite.getIconName().equals(base.toString())) {
-                return new MaterialTexture(sprite, true, material.renderInfo.getVertexColor(), () -> {});
+    public static MaterialTexture resolveForModel(ResourceLocation base, String materialId) {
+        while (true) {
+            TextureContext context = context();
+            try {
+                TextureRequest request = request(context, base, material(materialId));
+                if (request.shared && !request.override && request.selected.equals(base)) {
+                    TextureAtlasSprite sprite = atlasSprite(context, base);
+                    if (sprite.getIconName().equals(base.toString())) {
+                        return new MaterialTexture(sprite, true, request.vertexColor, () -> {});
+                    }
+                }
+                MaterialTexture texture = acquire(request);
+                if (texture != null) return texture;
+            } catch (StaleTextureContext ignored) {
+                // 资源重载已开始，重新获取当前材质和图集上下文。
             }
         }
-        return acquire(base, material);
     }
 
-    public static synchronized MaterialTexture acquire(ResourceLocation base, Material material) {
-        ResourceLocation direct = new ResourceLocation(base + "_" + material.identifier);
-        boolean override = exists(direct);
-        MaterialRenderInfo info = material.renderInfo;
-        ResourceLocation selected = override ? direct : selectBase(base, info);
-        if (!requiresNativeAtlas(material) && (override || isShared(material))) {
-            TextureAtlasSprite atlas = atlasSprite(selected);
-            if (selected.toString().equals(atlas.getIconName())) {
+    public static MaterialTexture acquire(ResourceLocation base, Material material) {
+        while (true) {
+            try {
+                MaterialTexture texture = acquire(request(context(), base, material));
+                if (texture != null) return texture;
+            } catch (StaleTextureContext ignored) {}
+        }
+    }
+
+    @Nullable
+    private static MaterialTexture acquire(TextureRequest request) {
+        if (!request.nativeAtlas && (request.override || request.shared)) {
+            TextureAtlasSprite atlas = atlasSprite(request.context, request.selected);
+            if (request.selected.toString().equals(atlas.getIconName())) {
                 // 独立读取几何所需帧，不让模型烘焙依赖主图集的 CPU 保留策略。
-                NativeSpriteLoader loader = loader();
-                TextureAtlasSprite scratch = loader.source(selected);
-                scratch.copyFrom(atlas);
-                return new MaterialTexture(scratch, !override, info == null ? -1 : info.getVertexColor(),
-                        () -> clearFrames(loader.ownedSprites()));
+                return acquireRaw(request.context, request.selected, !request.override, request.vertexColor);
             }
         }
-        MaterialKey key = new MaterialKey(base, material, generation);
-        Bundle bundle = PREPARED.remove(key);
-        if (bundle != null) preparedBytes -= bundle.bytes;
-        else bundle = generate(key);
-        Bundle acquired = bundle;
-        acquired.leases++;
-        return new MaterialTexture(acquired.primary, !override && info != null && info.useVertexColoring(),
-                info == null ? -1 : info.getVertexColor(), () -> release(acquired));
+        var lease = PREPARED.acquire(request.key, () -> generate(request));
+        if (lease == null) return null;
+        TextureAtlasSprite sprite = lease.value().primary;
+        FrameUse use = retainFrames(sprite, lease, request.context.generation);
+        return use == null ? null : new MaterialTexture(sprite, request.vertexColored, request.vertexColor,
+                () -> releaseFrames(sprite, use));
     }
 
     /** 原始强化/盔甲贴图的临时帧，不要求主图集保留 CPU 数据。 */
-    public static synchronized MaterialTexture acquireRaw(ResourceLocation texture) {
-        NativeSpriteLoader loader = loader();
-        TextureAtlasSprite sprite = loader.source(texture);
-        TextureAtlasSprite atlas = atlasSprite(texture);
-        if (atlas.getIconName().equals(texture.toString())) sprite.copyFrom(atlas);
-        return new MaterialTexture(sprite, false, -1, () -> clearFrames(loader.ownedSprites()));
+    public static MaterialTexture acquireRaw(ResourceLocation texture) {
+        while (true) {
+            try { return acquireRaw(context(), texture, false, -1); }
+            catch (StaleTextureContext ignored) {}
+        }
+    }
+
+    private static MaterialTexture acquireRaw(TextureContext context, ResourceLocation texture,
+                                               boolean vertexColored, int vertexColor) {
+        NativeSpriteLoader loader = loader(context);
+        try {
+            TextureAtlasSprite sprite = loader.source(texture);
+            TextureAtlasSprite atlas = atlasSprite(context, texture);
+            synchronized (NativeMaterialTextures.class) {
+                ensureCurrent(context);
+                if (atlas.getIconName().equals(texture.toString())) sprite.copyFrom(atlas);
+            }
+            return new MaterialTexture(sprite, vertexColored, vertexColor, loader::close);
+        } catch (RuntimeException | Error failure) {
+            loader.close();
+            throw failure;
+        }
     }
 
     public static synchronized boolean isManaged(TextureAtlasSprite sprite) {
@@ -193,20 +228,31 @@ public final class NativeMaterialTextures {
     @Nullable
     public static TextureAtlasSprite lookupMaterialSprite(String fullName) {
         if (LOOKUP_GUARD.get() || !TmtCustomTextureBridge.hasMaterialSpriteCandidate(fullName)) return null;
+        Function<String, TextureAtlasSprite> lookup;
+        int lookupGeneration;
         synchronized (NativeMaterialTextures.class) {
             // 等锁期间可能开始重载；StitcherCache 也不能拿到尚未就绪的虚拟 sprite。
             if (!atlasReady) return null;
-            LOOKUP_GUARD.set(true);
-            try {
-                return TmtCustomTextureBridge.lookupMaterialSprite(fullName);
-            } finally {
-                LOOKUP_GUARD.remove();
+            lookupGeneration = generation;
+            lookup = TmtCustomTextureBridge.materialSpriteLookup(fullName);
+        }
+        if (lookup == null) return null;
+        LOOKUP_GUARD.set(true);
+        try {
+            TextureAtlasSprite sprite = lookup.apply(fullName);
+            synchronized (NativeMaterialTextures.class) {
+                return atlasReady && generation == lookupGeneration ? sprite : null;
             }
+        } finally {
+            LOOKUP_GUARD.remove();
         }
     }
 
-    private static TextureAtlasSprite atlasSprite(ResourceLocation location) {
-        return directAtlasLookup(location, Minecraft.getMinecraft().getTextureMapBlocks()::getAtlasSprite);
+    private static TextureAtlasSprite atlasSprite(TextureContext context, ResourceLocation location) {
+        synchronized (NativeMaterialTextures.class) {
+            ensureCurrent(context);
+            return directAtlasLookup(location, context.atlas::getAtlasSprite);
+        }
     }
 
     /** 查源贴图时禁用按需回退，否则生成的材质可能被误认为自己的底图。 */
@@ -223,32 +269,84 @@ public final class NativeMaterialTextures {
     }
 
     /** 附属稍后才从原 sprite 烘焙轮廓时，临时恢复其帧；不改变对象类型和 UV。 */
-    public static synchronized FrameLease prepareFrames(TextureAtlasSprite sprite) {
-        Recipe recipe = RECIPES.get(sprite);
-        if (sprite.getFrameCount() > 0) {
-            Bundle prepared = recipe == null ? null : PREPARED.get(recipe.material);
-            if (prepared != null && prepared.outputs.get(recipe.spriteName) == sprite) {
-                PREPARED.remove(recipe.material);
-                preparedBytes -= prepared.bytes;
-                prepared.leases++;
-                return new FrameLease(() -> release(prepared));
+    public static FrameLease prepareFrames(TextureAtlasSprite sprite) {
+        Recipe recipe;
+        synchronized (NativeMaterialTextures.class) {
+            FrameUse present = FRAME_USES.get(sprite);
+            if (present != null) {
+                present.users++;
+                return new FrameLease(() -> releaseFrames(sprite, present));
             }
-            return new FrameLease(() -> {});
+            recipe = RECIPES.get(sprite);
+            if (sprite.getFrameCount() > 0) {
+                var held = recipe == null ? null : PREPARED.retainIfPresent(recipe.material);
+                FrameUse use = new FrameUse(false, held == null ? () -> {} : held::close);
+                FRAME_USES.put(sprite, use);
+                return new FrameLease(() -> releaseFrames(sprite, use));
+            }
+            if (recipe == null) throw new IllegalArgumentException("非 TMT 管理的空帧 sprite：" + sprite.getIconName());
         }
-        if (recipe == null) throw new IllegalArgumentException("非 TMT 管理的空帧 sprite：" + sprite.getIconName());
-        Bundle bundle = generate(recipe.material);
-        TextureAtlasSprite generatedSprite = bundle.outputs.get(recipe.spriteName);
-        if (generatedSprite == null) {
-            clearFrames(bundle.owned);
-            throw new IllegalStateException("重建时未生成子纹理：" + recipe.spriteName);
+        var held = acquireRecipe(recipe);
+        if (held == null) throw new StaleTextureContext();
+        FrameUse use;
+        boolean adopted = false;
+        try {
+            synchronized (NativeMaterialTextures.class) {
+                if (recipe.material.generation != generation) throw new StaleTextureContext();
+                use = FRAME_USES.get(sprite);
+                if (use != null) use.users++;
+                else {
+                    TextureAtlasSprite generated = held.value().outputs.get(recipe.spriteName);
+                    if (generated == null) throw new IllegalStateException("重建时未生成子纹理：" + recipe.spriteName);
+                    boolean copied = sprite != generated;
+                    if (copied) {
+                        List<int[][]> frames = new ArrayList<>(generated.getFrameCount());
+                        for (int i = 0; i < generated.getFrameCount(); i++) frames.add(generated.getFrameTextureData(i));
+                        sprite.setFramesTextureData(frames);
+                    }
+                    use = new FrameUse(copied, held::close);
+                    FRAME_USES.put(sprite, use);
+                    adopted = true;
+                }
+            }
+        } finally {
+            if (!adopted) held.close();
         }
-        List<int[][]> frames = new ArrayList<>(generatedSprite.getFrameCount());
-        for (int i = 0; i < generatedSprite.getFrameCount(); i++) frames.add(generatedSprite.getFrameTextureData(i));
-        sprite.setFramesTextureData(frames);
-        return new FrameLease(() -> {
-            sprite.clearFramesTextureData();
-            clearFrames(bundle.owned);
-        });
+        FrameUse acquired = use;
+        return new FrameLease(() -> releaseFrames(sprite, acquired));
+    }
+
+    private static void releaseFrames(TextureAtlasSprite sprite, FrameUse use) {
+        synchronized (NativeMaterialTextures.class) {
+            if (--use.users != 0) return;
+            FRAME_USES.remove(sprite);
+            if (use.copied || use.detached) sprite.clearFramesTextureData();
+        }
+        use.release.run();
+    }
+
+    private static FrameUse retainFrames(TextureAtlasSprite sprite,
+                                         LeasedTextureCache<MaterialKey, Bundle>.Lease held, int expectedGeneration) {
+        boolean adopted = false;
+        try {
+            synchronized (NativeMaterialTextures.class) {
+                if (expectedGeneration != generation) return null;
+                FrameUse use = FRAME_USES.get(sprite);
+                if (use != null) use.users++;
+                else {
+                    use = new FrameUse(false, held::close);
+                    FRAME_USES.put(sprite, use);
+                    adopted = true;
+                }
+                return use;
+            }
+        } finally { if (!adopted) held.close(); }
+    }
+
+    private static void clearAnimationFrames(TextureAtlasSprite sprite) {
+        FrameUse use = FRAME_USES.get(sprite);
+        if (use == null) sprite.clearFramesTextureData();
+        else use.detached = true;
     }
 
     /** 由 TConEvo TextureMapHandler 的窄入口调用；无生成上下文时保持原行为。 */
@@ -260,11 +358,29 @@ public final class NativeMaterialTextures {
     }
 
     @Nullable
-    public static synchronized TextureBinding binding(TextureAtlasSprite sprite) {
-        Recipe recipe = RECIPES.get(sprite);
-        if (recipe == null || recipe.inAtlas) return null;
-        Resident resident = RESIDENT.get(recipe);
-        if (resident == null) resident = makeResident(recipe);
+    public static TextureBinding binding(TextureAtlasSprite sprite) {
+        Recipe recipe;
+        synchronized (NativeMaterialTextures.class) {
+            recipe = RECIPES.get(sprite);
+            if (recipe == null || recipe.inAtlas) return null;
+            Resident resident = RESIDENT.get(recipe);
+            if (resident != null) return binding(resident);
+        }
+        var held = acquireRecipe(recipe);
+        if (held == null) return null;
+        try {
+            synchronized (NativeMaterialTextures.class) {
+                if (recipe.material.generation != generation) return null;
+                Resident resident = RESIDENT.get(recipe);
+                if (resident == null) resident = makeResident(recipe, held.value());
+                return binding(resident);
+            }
+        } finally {
+            held.discard();
+        }
+    }
+
+    private static TextureBinding binding(Resident resident) {
         resident.page.lastUse = ++useCounter;
         if (drawDepth > 0) resident.page.pinned = true;
         TexturePageLayout.Region r = resident.region;
@@ -286,7 +402,7 @@ public final class NativeMaterialTextures {
         }
     }
 
-    public static synchronized BufferedImage materialImage(ResourceLocation base, Material material) {
+    public static BufferedImage materialImage(ResourceLocation base, Material material) {
         try (MaterialTexture texture = acquire(base, material)) {
             TextureAtlasSprite sprite = texture.sprite();
             int[] pixels = firstFrame(sprite)[0];
@@ -311,9 +427,15 @@ public final class NativeMaterialTextures {
         }
     }
 
-    public static synchronized void clearGpu() {
+    public static void clearGpu() {
+        List<Bundle> expired;
+        synchronized (NativeMaterialTextures.class) { expired = clearGpuLocked(); }
+        expired.forEach(Bundle::dispose);
+    }
+
+    private static List<Bundle> clearGpuLocked() {
         for (Page page : PAGES) {
-            clearFrames(page.animations);
+            for (TextureAtlasSprite sprite : page.animations) clearAnimationFrames(sprite);
             Minecraft.getMinecraft().getTextureManager().deleteTexture(page.location);
         }
         PAGES.clear();
@@ -321,155 +443,191 @@ public final class NativeMaterialTextures {
         CONTENT.clear();
         gpuBytes = 0;
         animationBytes = 0;
-        for (Bundle bundle : PREPARED.values()) clearFrames(bundle.owned);
-        PREPARED.clear();
-        preparedBytes = 0;
+        return PREPARED.invalidate();
     }
 
-    public static synchronized void reload() {
-        atlasReady = false;
-        TmtCustomTextureBridge.clearBaseIndex();
-        clearGpu();
-        RECIPES.clear();
-        ATLAS_MATERIAL_SPRITES.clear();
-        nativeAtlasPixelBytes = 0;
-        EXISTS.clear();
-        tick = 0;
-        drawDepth = 0;
-        generation++;
+    public static void reload() {
+        List<Bundle> expired;
+        synchronized (NativeMaterialTextures.class) {
+            atlasReady = false;
+            generation++;
+            textureContext = null;
+            TmtCustomTextureBridge.clearBaseIndex();
+            expired = clearGpuLocked();
+            RECIPES.clear();
+            ATLAS_MATERIAL_SPRITES.clear();
+            nativeAtlasPixelBytes = 0;
+            EXISTS.clear();
+            tick = 0;
+            drawDepth = 0;
+        }
+        expired.forEach(Bundle::dispose);
     }
 
     public static synchronized Stats stats() {
-        return new Stats(PAGES.size(), RESIDENT.size(), gpuBytes, peakGpuBytes, preparedBytes, animationBytes,
+        return new Stats(PAGES.size(), RESIDENT.size(), gpuBytes, peakGpuBytes, PREPARED.bytes(), animationBytes,
                 generated, uploads, evictions, deduplicated, ATLAS_MATERIAL_SPRITES.size(), nativeAtlasPixelBytes,
                 generation, atlasReady);
     }
 
-    private static TextureAtlasSprite createPrimary(ResourceLocation base, Material material) {
-        ResourceLocation direct = new ResourceLocation(base + "_" + material.identifier);
-        if (exists(direct)) return NativeSpriteLoader.raw(direct);
-        MaterialRenderInfo info = material.renderInfo;
-        if (info == null) throw new IllegalStateException("材质没有原生 renderInfo 或覆盖纹理：" + material.identifier);
-        TextureAtlasSprite sprite = info.getTexture(selectBase(base, info), direct.toString());
-        if (sprite == null) throw new IllegalStateException("材质原生 getTexture 返回 null：" + material.identifier);
+    private static TextureAtlasSprite createPrimary(TextureRequest request) {
+        ResourceLocation direct = new ResourceLocation(request.key.base + "_" + request.key.material.identifier);
+        if (request.override) return NativeSpriteLoader.raw(direct);
+        if (request.info == null) throw new IllegalStateException("材质没有原生 renderInfo 或覆盖纹理：" + request.key.material.identifier);
+        TextureAtlasSprite sprite = NativeSpriteLoader.createTexture(
+                () -> request.info.getTexture(request.selected, direct.toString()));
+        if (sprite == null) throw new IllegalStateException("材质原生 getTexture 返回 null：" + request.key.material.identifier);
         return sprite;
     }
 
-    private static Bundle generate(MaterialKey key) {
-        NativeSpriteLoader loader = loader();
+    private static Bundle generate(TextureRequest request) {
+        NativeSpriteLoader loader = loader(request.context);
         List<TextureAtlasSprite> captured = new ArrayList<>();
         TextureAtlasSprite primary;
         List<TextureAtlasSprite> previousCapture = AUXILIARY.get();
         AUXILIARY.set(captured);
         try {
-            primary = createPrimary(key.base, key.material);
+            primary = createPrimary(request);
             loader.register(primary);
             for (TextureAtlasSprite sprite : captured) loader.register(sprite);
             loader.load(primary);
             for (int i = 0; i < captured.size(); i++) loader.load(captured.get(i));
-        } catch (RuntimeException failure) {
-            clearFrames(loader.ownedSprites());
+            Map<String, TextureAtlasSprite> outputs = new LinkedHashMap<>();
+            outputs.put(primary.getIconName(), primary);
+            for (TextureAtlasSprite sprite : captured) outputs.put(sprite.getIconName(), sprite);
+            long bytes = 0;
+            for (TextureAtlasSprite sprite : loader.ownedSprites()) bytes += frameBytes(sprite);
+            for (TextureAtlasSprite sprite : loader.restoredDependencies()) bytes += frameBytes(sprite);
+            return new Bundle(request.key, primary, outputs, loader, bytes);
+        } catch (RuntimeException | Error failure) {
+            loader.close();
             throw failure;
         } finally {
             if (previousCapture == null) AUXILIARY.remove();
             else AUXILIARY.set(previousCapture);
         }
-        Map<String, TextureAtlasSprite> outputs = new LinkedHashMap<>();
-        outputs.put(primary.getIconName(), primary);
-        for (TextureAtlasSprite sprite : captured) outputs.put(sprite.getIconName(), sprite);
-        for (TextureAtlasSprite sprite : outputs.values()) {
+    }
+
+    /** 这里只提交当前代次的对象和 UV，不进行资源读取或调用第三方加载器。 */
+    private static void publishBundle(Bundle bundle) {
+        for (TextureAtlasSprite sprite : bundle.outputs.values()) {
             TextureAtlasSprite registered = null;
             if (ATLAS_MATERIAL_SPRITES.contains(sprite.getIconName())) {
-                registered = atlasSprite(new ResourceLocation(sprite.getIconName()));
+                registered = atlasSprite(context(), new ResourceLocation(sprite.getIconName()));
                 if (!registered.getIconName().equals(sprite.getIconName())) {
                     throw new IllegalStateException("主图集材质未成功加载：" + sprite.getIconName());
                 }
             }
             boolean inAtlas = SpritePlacement.place(sprite, registered);
-            RECIPES.put(sprite, new Recipe(key, sprite.getIconName(), inAtlas));
+            RECIPES.put(sprite, new Recipe(bundle.key, sprite.getIconName(), inAtlas));
         }
         generated++;
-        long bytes = 0;
-        for (TextureAtlasSprite sprite : loader.ownedSprites()) bytes += frameBytes(sprite);
-        return new Bundle(key, primary, outputs, new ArrayList<>(loader.ownedSprites()), bytes);
     }
 
-    private static NativeSpriteLoader loader() {
-        Minecraft mc = Minecraft.getMinecraft();
-        TextureMap atlas = mc.getTextureMapBlocks();
-        return new NativeSpriteLoader(mc.getResourceManager(), location -> {
-            if (location.toString().equals(atlas.getMissingSprite().getIconName())) {
-                return NativeSpriteLoader.recoverMissingSprite(atlas.getMissingSprite(),
-                        TextureUtil.MISSING_TEXTURE_DATA, atlas.getMipmapLevels());
+    private static NativeSpriteLoader loader(TextureContext context) {
+        return new NativeSpriteLoader(context.resources, location -> {
+            synchronized (NativeMaterialTextures.class) {
+                ensureCurrent(context);
+                if (location.toString().equals(context.atlas.getMissingSprite().getIconName())) {
+                    return NativeSpriteLoader.recoverMissingSprite(context.atlas.getMissingSprite(),
+                            TextureUtil.MISSING_TEXTURE_DATA, context.mipLevels);
+                }
+                return directAtlasLookup(location, context.atlas::getTextureExtry);
             }
-            return directAtlasLookup(location, atlas::getTextureExtry);
-        }, atlas.getMipmapLevels());
+        }, context.mipLevels);
     }
 
-    private static ResourceLocation selectBase(ResourceLocation base, @Nullable MaterialRenderInfo info) {
+    private static ResourceLocation selectBase(TextureContext context, ResourceLocation base, @Nullable MaterialRenderInfo info) {
         if (info == null || info.getTextureSuffix() == null) return base;
         ResourceLocation suffixed = new ResourceLocation(base + "_" + info.getTextureSuffix());
-        if (exists(suffixed)) return suffixed;
-        TextureMap atlas = Minecraft.getMinecraft().getTextureMapBlocks();
-        return directAtlasLookup(suffixed, atlas::getTextureExtry) != null ? suffixed : base;
+        if (exists(context, suffixed)) return suffixed;
+        synchronized (NativeMaterialTextures.class) {
+            ensureCurrent(context);
+            return directAtlasLookup(suffixed, context.atlas::getTextureExtry) != null ? suffixed : base;
+        }
     }
 
-    public static synchronized boolean exists(ResourceLocation texture) {
-        Boolean cached = EXISTS.get(texture);
-        if (cached != null) return cached;
+    public static boolean exists(ResourceLocation texture) {
+        while (true) {
+            try { return exists(context(), texture); }
+            catch (StaleTextureContext ignored) {}
+        }
+    }
+
+    private static boolean exists(TextureContext context, ResourceLocation texture) {
+        synchronized (NativeMaterialTextures.class) {
+            ensureCurrent(context);
+            Boolean cached = EXISTS.get(texture);
+            if (cached != null) return cached;
+        }
         boolean found;
-        try (IResource ignored = Minecraft.getMinecraft().getResourceManager().getResource(NativeSpriteLoader.textureFile(texture))) {
+        try (IResource ignored = context.resources.getResource(NativeSpriteLoader.textureFile(texture))) {
             found = true;
         } catch (IOException exception) {
             found = false;
         }
-        EXISTS.put(texture, found);
-        if (EXISTS.size() > 4096) EXISTS.remove(EXISTS.keySet().iterator().next());
+        synchronized (NativeMaterialTextures.class) {
+            ensureCurrent(context);
+            EXISTS.put(texture, found);
+            if (EXISTS.size() > 4096) EXISTS.remove(EXISTS.keySet().iterator().next());
+        }
         return found;
     }
 
-    private static synchronized void release(Bundle bundle) {
-        if (--bundle.leases != 0) return;
-        if (bundle.key.generation != generation) {
-            clearFrames(bundle.owned);
-            return;
-        }
-        Bundle replaced = PREPARED.put(bundle.key, bundle);
-        if (replaced != null) {
-            preparedBytes -= replaced.bytes;
-            if (replaced != bundle) clearFrames(replaced.owned);
-        }
-        preparedBytes += bundle.bytes;
-        Iterator<Bundle> iterator = PREPARED.values().iterator();
-        while (preparedBytes > PREPARED_BUDGET && iterator.hasNext()) {
-            Bundle expired = iterator.next();
-            preparedBytes -= expired.bytes;
-            clearFrames(expired.owned);
-            iterator.remove();
+    private static Material material(String identifier) {
+        synchronized (NativeMaterialTextures.class) {
+            Material gui = slimeknights.tconstruct.library.client.CustomTextureCreator.guiMaterial;
+            return gui.identifier.equals(identifier) ? gui : TinkerRegistry.getMaterial(identifier);
         }
     }
 
-    private static Resident makeResident(Recipe recipe) {
-        Bundle bundle = PREPARED.remove(recipe.material);
-        if (bundle != null) preparedBytes -= bundle.bytes;
-        else bundle = generate(recipe.material);
-        try {
-            // 一次生成的 root/mask 一同上传；其原生对象间引用不会因子纹理懒加载而断裂。
-            for (Map.Entry<String, TextureAtlasSprite> entry : bundle.outputs.entrySet()) {
-                Recipe outputRecipe = new Recipe(recipe.material, entry.getKey(), false);
-                if (RESIDENT.containsKey(outputRecipe)) continue;
-                upload(outputRecipe, entry.getValue());
+    private static TextureContext context() {
+        synchronized (NativeMaterialTextures.class) {
+            if (textureContext == null) {
+                Minecraft mc = Minecraft.getMinecraft();
+                TextureMap atlas = mc.getTextureMapBlocks();
+                textureContext = new TextureContext(generation, mc.getResourceManager(), atlas, atlas.getMipmapLevels());
             }
-            Resident result = RESIDENT.get(recipe);
-            if (result == null) throw new IllegalStateException("原生材质重建时缺少子纹理：" + recipe.spriteName);
-            return result;
-        } finally {
-            for (TextureAtlasSprite owned : bundle.owned) {
-                boolean retained = false;
-                for (Page page : PAGES) if (page.animations.contains(owned)) { retained = true; break; }
-                if (!retained) owned.clearFramesTextureData();
-            }
+            return textureContext;
         }
+    }
+
+    private static void ensureCurrent(TextureContext context) {
+        if (context.generation != generation) throw new StaleTextureContext();
+    }
+
+    private static TextureRequest request(TextureContext context, ResourceLocation base, Material material) {
+        MaterialRenderInfo info;
+        synchronized (NativeMaterialTextures.class) {
+            ensureCurrent(context);
+            info = material.renderInfo;
+        }
+        boolean override = exists(context, new ResourceLocation(base + "_" + material.identifier));
+        ResourceLocation selected = override ? new ResourceLocation(base + "_" + material.identifier) : selectBase(context, base, info);
+        return new TextureRequest(context, new MaterialKey(base, material, context.generation), info, selected,
+                override, info != null && info.getClass() == MaterialRenderInfo.Default.class,
+                info instanceof NativeAtlasMaterial, !override && info != null && info.useVertexColoring(),
+                info == null ? -1 : info.getVertexColor());
+    }
+
+    private static LeasedTextureCache<MaterialKey, Bundle>.Lease acquireRecipe(Recipe recipe) {
+        TextureContext context = context();
+        if (context.generation != recipe.material.generation) return null;
+        return PREPARED.acquire(recipe.material,
+                () -> generate(request(context, recipe.material.base, recipe.material.material)));
+    }
+
+    private static Resident makeResident(Recipe recipe, Bundle bundle) {
+        // 一次生成的 root/mask 一同上传；生成已在锁外完成，GL 和页分配仍由客户端执行。
+        for (Map.Entry<String, TextureAtlasSprite> entry : bundle.outputs.entrySet()) {
+            Recipe outputRecipe = new Recipe(recipe.material, entry.getKey(), false);
+            if (RESIDENT.containsKey(outputRecipe)) continue;
+            upload(outputRecipe, entry.getValue());
+            if (entry.getValue().hasAnimationMetadata()) bundle.retained.add(entry.getValue());
+        }
+        Resident result = RESIDENT.get(recipe);
+        if (result == null) throw new IllegalStateException("原生材质重建时缺少子纹理：" + recipe.spriteName);
+        return result;
     }
 
     private static void upload(Recipe recipe, TextureAtlasSprite sprite) {
@@ -559,7 +717,7 @@ public final class NativeMaterialTextures {
     private static void evict(Page page) {
         RESIDENT.values().removeIf(resident -> resident.page == page);
         CONTENT.values().removeIf(resident -> resident.page == page);
-        for (TextureAtlasSprite animation : page.animations) animation.clearFramesTextureData();
+        for (TextureAtlasSprite animation : page.animations) clearAnimationFrames(animation);
         Minecraft.getMinecraft().getTextureManager().deleteTexture(page.location);
         PAGES.remove(page);
         gpuBytes -= page.bytes;
@@ -584,10 +742,6 @@ public final class NativeMaterialTextures {
         return size;
     }
 
-    private static void clearFrames(List<TextureAtlasSprite> sprites) {
-        for (TextureAtlasSprite sprite : sprites) sprite.clearFramesTextureData();
-    }
-
     private static int powerOfTwo(int size) {
         return Integer.highestOneBit(Math.max(1, size - 1)) << 1;
     }
@@ -603,6 +757,11 @@ public final class NativeMaterialTextures {
                         long generated, long uploads, long evictions, long deduplicated, int nativeAtlasSprites,
                         long nativeAtlasPixelBytes, int generation, boolean atlasReady) {}
     private record MaterialKey(ResourceLocation base, Material material, int generation) {}
+    record TextureContext(int generation, IResourceManager resources, TextureMap atlas, int mipLevels) {}
+    private record TextureRequest(TextureContext context, MaterialKey key, MaterialRenderInfo info,
+                                  ResourceLocation selected, boolean override, boolean shared,
+                                  boolean nativeAtlas, boolean vertexColored, int vertexColor) {}
+    private static final class StaleTextureContext extends RuntimeException {}
     private record Recipe(MaterialKey material, String spriteName, boolean inAtlas) {}
     private record Resident(Page page, TexturePageLayout.Region region) {}
 
@@ -637,13 +796,22 @@ public final class NativeMaterialTextures {
         final MaterialKey key;
         final TextureAtlasSprite primary;
         final Map<String, TextureAtlasSprite> outputs;
-        final List<TextureAtlasSprite> owned;
+        final NativeSpriteLoader loader;
+        final Set<TextureAtlasSprite> retained = new HashSet<>();
         final long bytes;
-        int leases;
         Bundle(MaterialKey key, TextureAtlasSprite primary, Map<String, TextureAtlasSprite> outputs,
-               List<TextureAtlasSprite> owned, long bytes) {
-            this.key = key; this.primary = primary; this.outputs = outputs; this.owned = owned; this.bytes = bytes;
+               NativeSpriteLoader loader, long bytes) {
+            this.key = key; this.primary = primary; this.outputs = outputs; this.loader = loader; this.bytes = bytes;
         }
+        void dispose() { loader.releaseFrames(retained); }
+    }
+
+    private static final class FrameUse {
+        final boolean copied;
+        final Runnable release;
+        int users = 1;
+        boolean detached;
+        FrameUse(boolean copied, Runnable release) { this.copied = copied; this.release = release; }
     }
 
     private static final class Page {

@@ -14,12 +14,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * 使用 Forge 的公开 sprite 加载协议。附属的 load/preProcess/postProcess
  * 及其依赖顺序均由原对象执行，不从类名猜测颜色算法。
  */
-public final class NativeSpriteLoader {
+public final class NativeSpriteLoader implements AutoCloseable {
     private static final ResourceLocation MISSING_TEXTURE = new ResourceLocation("missingno");
     private final IResourceManager resources;
     private final Function<ResourceLocation, TextureAtlasSprite> registered;
@@ -28,6 +29,7 @@ public final class NativeSpriteLoader {
     private final Set<TextureAtlasSprite> loaded = new HashSet<>();
     private final Set<TextureAtlasSprite> loading = new HashSet<>();
     private final List<TextureAtlasSprite> owned = new ArrayList<>();
+    private final List<SharedSpriteFrames.Lease> borrowed = new ArrayList<>();
 
     public NativeSpriteLoader(IResourceManager resources,
                               Function<ResourceLocation, TextureAtlasSprite> registered,
@@ -50,7 +52,6 @@ public final class NativeSpriteLoader {
         }
         // 普通 PNG 使用独立帧：不依赖 FoamFix 等是否已释放主图集的 CPU 数据。
         TextureAtlasSprite sprite;
-        TextureAtlasSprite previousCoordinates = null;
         try (IResource ignored = resources.getResource(textureFile(location))) {
             sprite = new SourceSprite(location.toString());
             register(sprite);
@@ -58,29 +59,38 @@ public final class NativeSpriteLoader {
             sprite = registered.apply(location);
             if (sprite == null) return missingSource(location);
             sprites.put(location, sprite);
-            if (sprite.getFrameCount() > 0) {
-                loaded.add(sprite);
-                return sprite;
-            }
-            // 自定义依赖只有原对象能够重新加载；保留它的主图集坐标。
-            if (!sprite.hasCustomLoader(resources, textureFile(location))) {
+            TextureAtlasSprite shared = sprite;
+            if (shared.getFrameCount() == 0 && !SharedSpriteFrames.custom(
+                    () -> shared.hasCustomLoader(resources, textureFile(location)))) {
                 return missingSource(location);
             }
-            if (sprite.getIconWidth() > 0 && sprite.getMaxU() > sprite.getMinU()) {
-                previousCoordinates = raw(location);
-                previousCoordinates.copyFrom(sprite);
-            }
+            borrowed.add(SharedSpriteFrames.acquire(shared, () -> {
+                TextureAtlasSprite coordinates = shared.getIconWidth() > 0 && shared.getMaxU() > shared.getMinU()
+                        ? raw(location) : null;
+                if (coordinates != null) coordinates.copyFrom(shared);
+                try {
+                    load(shared);
+                } finally {
+                    if (coordinates != null) shared.copyFrom(coordinates);
+                }
+            }));
+            loaded.add(shared);
+            return shared;
         }
-        try {
-            load(sprite);
-        } finally {
-            if (previousCoordinates != null) sprite.copyFrom(previousCoordinates);
-        }
-        if (!owned.contains(sprite) && !sprite.hasAnimationMetadata()) owned.add(sprite);
+        load(sprite);
         return sprite;
     }
 
     public void load(TextureAtlasSprite sprite) {
+        if (loaded.contains(sprite)) return;
+        if (sprite instanceof SourceSprite) { loadSprite(sprite); return; }
+        if (SharedSpriteFrames.custom(() -> sprite.hasCustomLoader(resources,
+                textureFile(new ResourceLocation(sprite.getIconName()))))) {
+            SharedSpriteFrames.custom(() -> { loadSprite(sprite); return null; });
+        } else loadSprite(sprite);
+    }
+
+    private void loadSprite(TextureAtlasSprite sprite) {
         if (loaded.contains(sprite)) return;
         if (!loading.add(sprite)) throw new IllegalStateException("循环纹理依赖：" + sprite.getIconName());
         ResourceLocation file = textureFile(new ResourceLocation(sprite.getIconName()));
@@ -147,6 +157,25 @@ public final class NativeSpriteLoader {
     public List<TextureAtlasSprite> ownedSprites() {
         return owned;
     }
+
+    public List<TextureAtlasSprite> restoredDependencies() {
+        List<TextureAtlasSprite> restored = new ArrayList<>();
+        for (SharedSpriteFrames.Lease lease : borrowed) if (lease.ownsFrames()) restored.add(lease.sprite());
+        return restored;
+    }
+
+    public static TextureAtlasSprite createTexture(Supplier<TextureAtlasSprite> factory) {
+        return SharedSpriteFrames.custom(factory);
+    }
+
+    /** 动画输出可把帧的所有权交给 GPU 页；共享依赖按引用计数归还。 */
+    public void releaseFrames(Set<TextureAtlasSprite> retained) {
+        for (TextureAtlasSprite sprite : owned) if (!retained.contains(sprite)) sprite.clearFramesTextureData();
+        for (SharedSpriteFrames.Lease lease : borrowed) lease.close();
+        borrowed.clear();
+    }
+
+    @Override public void close() { releaseFrames(Set.of()); }
 
     public static ResourceLocation textureFile(ResourceLocation texture) {
         String path = texture.getPath();

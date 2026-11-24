@@ -142,6 +142,24 @@ class MaterialSpriteLookupTest {
     }
 
     @Test
+    void candidateMaterialChecksAndGenerationRunOutsideClassLock() {
+        TextureAtlasSprite generated = sprite("test:part_iron");
+        register("test:part", new AbstractMap<>() {
+            @Override public boolean containsKey(Object key) {
+                assertFalse(Thread.holdsLock(NativeMaterialTextures.class));
+                return "iron".equals(key);
+            }
+            @Override public TextureAtlasSprite get(Object key) {
+                assertFalse(Thread.holdsLock(NativeMaterialTextures.class));
+                return generated;
+            }
+            @Override public Set<Entry<String, TextureAtlasSprite>> entrySet() { throw new AssertionError(); }
+        });
+        TmtCustomTextureBridge.publishBaseIndex();
+        assertSame(generated, NativeMaterialTextures.lookupMaterialSprite("test:part_iron"));
+    }
+
+    @Test
     void failedGenerationDoesNotLeaveRecursionGuardEnabled() {
         TextureAtlasSprite generated = sprite("test:part_iron");
         register("test:part", new AbstractMap<>() {
