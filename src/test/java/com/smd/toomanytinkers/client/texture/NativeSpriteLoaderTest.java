@@ -184,6 +184,37 @@ class NativeSpriteLoaderTest {
         assertEquals(0, missing.getFrameCount());
     }
 
+    @Test void vanillaUnqualifiedMissingSpriteNameRecoversEvenWhenNamespacedEntryIsEmpty() {
+        int[] missingPixels = new int[16 * 16];
+        java.util.Arrays.fill(missingPixels, 0xffff00ff);
+        TextureAtlasSprite vanillaMissing = new TextureAtlasSprite("missingno") {};
+        vanillaMissing.setIconWidth(16);
+        vanillaMissing.setIconHeight(16);
+        vanillaMissing.initSprite(32, 32, 0, 0, false);
+        TextureAtlasSprite emptyRegisteredMissing = NativeSpriteLoader.raw(MISSING);
+
+        assertTrue(NativeSpriteLoader.isMissingTexture(MISSING, vanillaMissing));
+        assertFalse(NativeSpriteLoader.isMissingTexture(BASE, vanillaMissing));
+
+        NativeSpriteLoader loader = new NativeSpriteLoader(NO_RESOURCES,
+                location -> NativeSpriteLoader.isMissingTexture(location, vanillaMissing)
+                        ? NativeSpriteLoader.recoverMissingSprite(vanillaMissing, missingPixels, 0)
+                        : (MISSING.equals(location) ? emptyRegisteredMissing : null), 0);
+        int[] basePixels = new int[16 * 16];
+        java.util.Arrays.fill(basePixels, 0xffffffff);
+        loader.register(new Fixture(BASE, 16, 16, basePixels));
+        TextureColoredTexture treatedWood = new TextureColoredTexture(
+                new ResourceLocation("immersiveengineering:blocks/treated_wood"), BASE,
+                "tconstruct:items/parts/large_plate_treatedwood");
+        treatedWood.stencil = true;
+        loader.register(treatedWood);
+
+        assertDoesNotThrow(() -> loader.load(treatedWood));
+        assertEquals(1, treatedWood.getFrameCount());
+        assertArrayEquals(missingPixels, treatedWood.getFrameTextureData(0)[0]);
+        assertEquals(0, vanillaMissing.getFrameCount());
+    }
+
     @Test void releasedAtlasDependencyWithoutPngUsesMissingTexture() {
         Fixture missing = new Fixture(MISSING, 2, 2, new int[]{-1, -1, -1, -1});
         missing.load(NO_RESOURCES, MISSING, ignored -> null);

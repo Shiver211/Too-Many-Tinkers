@@ -528,7 +528,7 @@ public final class NativeMaterialTextures {
         return new NativeSpriteLoader(context.resources, location -> {
             synchronized (NativeMaterialTextures.class) {
                 ensureCurrent(context);
-                if (location.toString().equals(context.atlas.getMissingSprite().getIconName())) {
+                if (NativeSpriteLoader.isMissingTexture(location, context.atlas.getMissingSprite())) {
                     return NativeSpriteLoader.recoverMissingSprite(context.atlas.getMissingSprite(),
                             TextureUtil.MISSING_TEXTURE_DATA, context.mipLevels);
                 }

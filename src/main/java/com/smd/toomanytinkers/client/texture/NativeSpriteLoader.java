@@ -58,12 +58,12 @@ public final class NativeSpriteLoader implements AutoCloseable {
         } catch (IOException missingFile) {
             sprite = registered.apply(location);
             if (sprite == null) return missingSource(location);
-            sprites.put(location, sprite);
             TextureAtlasSprite shared = sprite;
             if (shared.getFrameCount() == 0 && !SharedSpriteFrames.custom(
                     () -> shared.hasCustomLoader(resources, textureFile(location)))) {
                 return missingSource(location);
             }
+            sprites.put(location, shared);
             borrowed.add(SharedSpriteFrames.acquire(shared, () -> {
                 TextureAtlasSprite coordinates = shared.getIconWidth() > 0 && shared.getMaxU() > shared.getMinU()
                         ? raw(location) : null;
@@ -140,6 +140,12 @@ public final class NativeSpriteLoader implements AutoCloseable {
         sprites.put(location, missing);
         loaded.add(missing);
         return missing;
+    }
+
+    /** 原版 missingImage 的 iconName 是无命名空间的 "missingno"，不能直接与 ResourceLocation.toString() 比较。 */
+    public static boolean isMissingTexture(ResourceLocation location, TextureAtlasSprite missingSprite) {
+        return MISSING_TEXTURE.equals(location)
+                || (missingSprite != null && location.equals(new ResourceLocation(missingSprite.getIconName())));
     }
 
     /** LoliASM 可能已释放 missingno 的帧；只恢复本次加载需要的副本。 */
